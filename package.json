@@ -1,0 +1,32 @@
+{
+  "name": "pi-session-graph",
+  "version": "0.1.0",
+  "description": "Session lineage graph tools for Pi",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "session",
+    "lineage",
+    "graph"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.74.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
