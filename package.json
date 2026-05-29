@@ -8,7 +8,8 @@
   "scripts": {
     "lint": "tsc --noEmit",
     "reconstruct": "tsx scripts/reconstruct-local-history.ts",
-    "validate-timeline": "tsx scripts/validate-session-timeline.ts"
+    "validate-timeline": "tsx scripts/validate-session-timeline.ts",
+    "index-segments": "tsx scripts/index-session-segments.ts"
   },
   "keywords": [
     "pi",
