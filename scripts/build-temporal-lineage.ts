@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 type RelocationRecord = {
@@ -24,6 +24,7 @@ type SessionStats = {
 	path: string;
 	exists: boolean;
 	currentLines: number;
+	startTimestamp?: string;
 	firstTimestamp?: string;
 	lastTimestamp?: string;
 	bytes?: number;
@@ -55,6 +56,7 @@ const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(home, ".pi", "agent");
 const outputDir = join(agentDir, "session-graph");
 const manifestPath = join(agentDir, "relocations.jsonl");
 const overlayPath = join(outputDir, "lineage-overlays.jsonl");
+const sessionsDir = join(agentDir, "sessions");
 
 function shortHash(value: string) {
 	return createHash("sha256").update(value).digest("hex").slice(0, 8);
@@ -64,11 +66,35 @@ function homeShort(path: string) {
 	return path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
 }
 
+function sessionStartTimestamp(path: string) {
+	const match = basename(path).match(/^(\d{4}-\d{2}-\d{2}T\d{2}[-:]\d{2}[-:]\d{2}[.-]\d{3}Z)/);
+	return match?.[1].replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z");
+}
+
 function label(cwd: string | undefined, session: string) {
 	if (cwd && !cwd.startsWith("(")) return basename(cwd) || cwd;
 	const bucket = session.match(/\/sessions\/--(.+?)--\//)?.[1];
 	if (bucket) return bucket.replace(/^Users-sam-git-/, "").replaceAll("-", "/");
 	return basename(session).slice(0, 32);
+}
+
+async function listSessionFiles(root = sessionsDir) {
+	const found: string[] = [];
+	async function walk(dir: string) {
+		let entries: import("node:fs").Dirent[];
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const path = join(dir, entry.name);
+			if (entry.isDirectory()) await walk(path);
+			else if (entry.isFile() && entry.name.endsWith(".jsonl")) found.push(path);
+		}
+	}
+	await walk(root);
+	return found;
 }
 
 async function readJsonl<T>(path: string): Promise<T[]> {
@@ -114,7 +140,7 @@ async function sessionStats(path: string): Promise<SessionStats> {
 				// Ignore malformed forensic rows; preserve counts.
 			}
 		}
-		return { path, exists: true, currentLines, firstTimestamp, lastTimestamp, bytes: st.size };
+		return { path, exists: true, currentLines, startTimestamp: sessionStartTimestamp(path), firstTimestamp, lastTimestamp, bytes: st.size };
 	} catch {
 		return { path, exists: false, currentLines: 0 };
 	}
@@ -151,6 +177,7 @@ function manifestClassifications(overlays: OverlayRecord[]) {
 async function build() {
 	const manifest = await readJsonl<RelocationRecord>(manifestPath);
 	const overlays = await readJsonl<OverlayRecord>(overlayPath);
+	const discoveredSessions = await listSessionFiles();
 	const classifications = manifestClassifications(overlays);
 	const overlayEdges = overlays.filter((record): record is Extract<OverlayRecord, { kind: "edge" }> => record.kind === "edge");
 	const sessions = new Set<string>();
@@ -163,6 +190,7 @@ async function build() {
 		sessions.add(record.destination);
 	}
 	for (const record of overlays) if (record.kind === "root") sessions.add(record.session);
+	for (const session of discoveredSessions) sessions.add(session);
 
 	const statsEntries = await Promise.all([...sessions].map(async (path) => [path, await sessionStats(path)] as const));
 	const stats = new Map(statsEntries);
@@ -214,7 +242,11 @@ async function build() {
 	}
 
 	edges.sort((a, b) => a.ts.localeCompare(b.ts));
-	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath }, sessionStats: Object.fromEntries(stats), edges };
+	const sessionStarts = [...stats.values()]
+		.filter((record) => record.startTimestamp)
+		.map((record) => ({ path: record.path, ts: record.startTimestamp!, label: label(undefined, record.path), currentLines: record.currentLines, exists: record.exists }))
+		.sort((a, b) => a.ts.localeCompare(b.ts));
+	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
 }
 
 function mermaid(report: Awaited<ReturnType<typeof build>>) {
@@ -227,6 +259,12 @@ function mermaid(report: Awaited<ReturnType<typeof build>>) {
 		sessionIds.set(path, id);
 		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
+	}
+	for (const start of report.sessionStarts) {
+		const nodeId = sessionNode(start.path, undefined, start.currentLines);
+		const startId = `start_${shortHash(start.path)}`;
+		lines.push(`  ${startId}(("start<br/>${start.ts.slice(0, 16)}"))`);
+		lines.push(`  ${startId} --> ${nodeId}`);
 	}
 	const edgesBySource = new Map<string, TemporalEdge[]>();
 	for (const edge of report.edges) {
@@ -251,8 +289,10 @@ function mermaid(report: Awaited<ReturnType<typeof build>>) {
 			previousState = stateId;
 		}
 	}
+	lines.push("  classDef start fill:#e0e7ff,stroke:#4f46e5;");
 	lines.push("  classDef session fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px;");
 	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
+	for (const start of report.sessionStarts) lines.push(`  class start_${shortHash(start.path)} start;`);
 	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
 	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
@@ -272,6 +312,7 @@ function html(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 <p>Generated: ${report.generatedAt}</p>
 <div class="legend">
 <ul>
+<li><strong>Purple circles</strong>: session starts from JSONL filename timestamps.</li>
 <li><strong>Blue boxes</strong>: session files/topology nodes.</li>
 <li><strong>Yellow diamonds</strong>: source-session states at specific relocation times.</li>
 <li><strong>Dotted arrows</strong>: progression inside the same append-only session file.</li>
@@ -291,10 +332,11 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 		"",
 		`Generated: ${report.generatedAt}`,
 		"",
-		"This report models both topology and progression. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
+		"This report models both topology and progression. Purple circles are session starts from JSONL filename timestamps. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
 		"",
 		`Manifest: ${homeShort(report.inputs.manifestPath)}`,
 		`Overlay: ${homeShort(report.inputs.overlayPath)}`,
+		`Session starts: ${report.sessionStarts.length}`,
 		`Edges: ${report.edges.length}`,
 		`Sessions: ${Object.keys(report.sessionStats).length}`,
 		"",
