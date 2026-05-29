@@ -249,8 +249,13 @@ async function build() {
 	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
 }
 
-function mermaid(report: Awaited<ReturnType<typeof build>>) {
+function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
 	const lines = ["flowchart LR"];
+	const connectedSessions = new Set<string>();
+	for (const edge of report.edges) {
+		connectedSessions.add(edge.sourceSession);
+		connectedSessions.add(edge.destinationSession);
+	}
 	const sessionIds = new Map<string, string>();
 	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
 		const existing = sessionIds.get(path);
@@ -260,7 +265,8 @@ function mermaid(report: Awaited<ReturnType<typeof build>>) {
 		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
-	for (const start of report.sessionStarts) {
+	const starts = options.allStarts ? report.sessionStarts : report.sessionStarts.filter((start) => connectedSessions.has(start.path));
+	for (const start of starts) {
 		const nodeId = sessionNode(start.path, undefined, start.currentLines);
 		const startId = `start_${shortHash(start.path)}`;
 		lines.push(`  ${startId}(("start<br/>${start.ts.slice(0, 16)}"))`);
@@ -292,7 +298,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>) {
 	lines.push("  classDef start fill:#e0e7ff,stroke:#4f46e5;");
 	lines.push("  classDef session fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px;");
 	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
-	for (const start of report.sessionStarts) lines.push(`  class start_${shortHash(start.path)} start;`);
+	for (const start of starts) lines.push(`  class start_${shortHash(start.path)} start;`);
 	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
 	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
@@ -312,7 +318,7 @@ function html(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 <p>Generated: ${report.generatedAt}</p>
 <div class="legend">
 <ul>
-<li><strong>Purple circles</strong>: session starts from JSONL filename timestamps.</li>
+<li><strong>Purple circles</strong>: session starts from JSONL filename timestamps. By default the diagram shows starts only for sessions connected to relocation/overlay edges, to avoid Mermaid browser size limits. The JSON/Markdown event data still includes all discovered starts.</li>
 <li><strong>Blue boxes</strong>: session files/topology nodes.</li>
 <li><strong>Yellow diamonds</strong>: source-session states at specific relocation times.</li>
 <li><strong>Dotted arrows</strong>: progression inside the same append-only session file.</li>
@@ -332,7 +338,7 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 		"",
 		`Generated: ${report.generatedAt}`,
 		"",
-		"This report models both topology and progression. Purple circles are session starts from JSONL filename timestamps. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
+		"This report models both topology and progression. Purple circles are session starts from JSONL filename timestamps; the Mermaid diagram shows starts for relocation-connected sessions by default to avoid browser size limits, while JSON data includes all discovered starts. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
 		"",
 		`Manifest: ${homeShort(report.inputs.manifestPath)}`,
 		`Overlay: ${homeShort(report.inputs.overlayPath)}`,
@@ -357,9 +363,10 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 
 async function main() {
 	const snapshot = process.argv.includes("--snapshot");
+	const allStarts = process.argv.includes("--all-starts");
 	await mkdir(outputDir, { recursive: true });
 	const report = await build();
-	const mmd = mermaid(report);
+	const mmd = mermaid(report, { allStarts });
 	const md = markdown(report, mmd);
 	const htmlDoc = html(report, mmd);
 	const latestFiles = [
