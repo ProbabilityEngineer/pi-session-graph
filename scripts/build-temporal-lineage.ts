@@ -356,23 +356,28 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 }
 
 async function main() {
+	const snapshot = process.argv.includes("--snapshot");
 	await mkdir(outputDir, { recursive: true });
 	const report = await build();
 	const mmd = mermaid(report);
 	const md = markdown(report, mmd);
 	const htmlDoc = html(report, mmd);
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	for (const [name, content] of [
+	const latestFiles = [
 		["temporal-lineage.json", JSON.stringify(report, null, 2) + "\n"],
 		["temporal-lineage.mmd", mmd + "\n"],
 		["temporal-lineage.md", md],
 		["temporal-lineage.html", htmlDoc],
-		[`temporal-lineage_${stamp}.json`, JSON.stringify(report, null, 2) + "\n"],
-		[`temporal-lineage_${stamp}.mmd`, mmd + "\n"],
-		[`temporal-lineage_${stamp}.md`, md],
-		[`temporal-lineage_${stamp}.html`, htmlDoc],
-	] as const) await writeFile(join(outputDir, name), content);
+	] as const;
+	for (const [name, content] of latestFiles) await writeFile(join(outputDir, name), content);
+	let snapshotDir: string | undefined;
+	if (snapshot) {
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		snapshotDir = join(outputDir, "snapshots", "temporal-lineage");
+		await mkdir(snapshotDir, { recursive: true });
+		for (const [name, content] of latestFiles) await writeFile(join(snapshotDir, name.replace("temporal-lineage", `temporal-lineage_${stamp}`)), content);
+	}
 	console.log(`Wrote temporal lineage with ${report.edges.length} edges to ${outputDir}`);
+	if (snapshotDir) console.log(`Wrote timestamped snapshot to ${snapshotDir}`);
 }
 
 await main();
