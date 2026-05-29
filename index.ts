@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
-import { basename, join, relative } from "node:path";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 const MANIFEST = "relocations.jsonl";
 
@@ -142,6 +142,37 @@ function formatHop(record: RelocationRecord, index: number, current?: string, fi
 	return lines;
 }
 
+function componentGraph(graph: Graph, current?: string) {
+	if (!current || !graph.nodes.has(current)) return graph;
+	const keep = new Set<string>([current]);
+	const queue = [current];
+	while (queue.length) {
+		const path = queue.shift()!;
+		const parent = graph.byDestination.get(path);
+		if (parent && !keep.has(parent.sourceSession)) {
+			keep.add(parent.sourceSession);
+			queue.push(parent.sourceSession);
+		}
+		for (const child of graph.children.get(path) ?? []) {
+			if (!keep.has(child.destinationSession)) {
+				keep.add(child.destinationSession);
+				queue.push(child.destinationSession);
+			}
+		}
+	}
+	const records = graph.records.filter((record) => keep.has(record.sourceSession) && keep.has(record.destinationSession));
+	const nodes = new Map([...graph.nodes.entries()].filter(([path]) => keep.has(path)));
+	const children = new Map<string, RelocationRecord[]>();
+	const byDestination = new Map<string, RelocationRecord>();
+	for (const record of records) {
+		const list = children.get(record.sourceSession) ?? [];
+		list.push(record);
+		children.set(record.sourceSession, list);
+		byDestination.set(record.destinationSession, record);
+	}
+	return { records, nodes, children, byDestination };
+}
+
 function mermaid(graph: Graph, current?: string) {
 	const lines = ["graph TD"];
 	for (const node of graph.nodes.values()) {
@@ -156,6 +187,37 @@ function mermaid(graph: Graph, current?: string) {
 		lines.push(`  ${from.id} ${style}|${record.ts.slice(0, 10)}| ${to.id}`);
 	}
 	return lines.join("\n");
+}
+
+function timestamp() {
+	return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+async function writeGraphFiles(cwd: string, graph: Graph, current?: string) {
+	const dir = join(cwd, "session-graph");
+	await mkdir(dir, { recursive: true });
+	const stamp = timestamp();
+	const mmd = mermaid(graph, current);
+	const md = [
+		"# Session graph",
+		"",
+		`Generated: ${new Date().toISOString()}`,
+		`Records: ${graph.records.length}`,
+		`Sessions: ${graph.nodes.size}`,
+		`Roots: ${roots(graph).length}`,
+		`Leaves: ${leaves(graph).length}`,
+		`Fork points: ${forks(graph).length}`,
+		"",
+		"```mermaid",
+		mmd,
+		"```",
+		"",
+	].join("\n");
+	const mdPath = join(dir, `session_graph_${stamp}.md`);
+	const mmdPath = join(dir, `graph_${stamp}.mmd`);
+	await writeFile(mdPath, md, { encoding: "utf8", flag: "wx" });
+	await writeFile(mmdPath, mmd + "\n", { encoding: "utf8", flag: "wx" });
+	return { mdPath, mmdPath };
 }
 
 async function listSessionFiles(root = join(agentDir(), "sessions")) {
@@ -223,12 +285,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("session-leaves", {
-		description: "Show known graph leaves.",
-		handler: async (_args, ctx) => {
-			const graph = await buildGraph();
+		description: "Show graph leaves for the current component. Use --all for all known leaves.",
+		handler: async (args, ctx) => {
+			const flags = parseFlags(args);
+			const full = await buildGraph();
 			const current = currentSession(ctx);
+			const graph = flags.has("--all") ? full : componentGraph(full, current);
 			const nodes = leaves(graph).sort((a, b) => a.label.localeCompare(b.label));
-			const lines = ["Session leaves", ""];
+			const lines = [flags.has("--all") ? "Session leaves (all)" : "Session leaves (current component)", ""];
 			for (const node of nodes) lines.push(`- ${node.label}${node.path === current ? " current" : ""} (${node.id})`);
 			if (!nodes.length) lines.push("(none)");
 			ctx.ui.notify(lines.join("\n"), "info");
@@ -236,17 +300,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("session-graph", {
-		description: "Show session graph summary. Use --mermaid for Mermaid output.",
+		description: "Write timestamped session graph Markdown/Mermaid files and show a summary. Use --all for the full forest.",
 		handler: async (args, ctx) => {
 			const flags = parseFlags(args);
-			const graph = await buildGraph();
+			const full = await buildGraph();
 			const current = currentSession(ctx);
-			if (flags.has("--mermaid")) {
-				ctx.ui.notify(mermaid(graph, current), "info");
-				return;
-			}
+			const graph = flags.has("--all") ? full : componentGraph(full, current);
+			const written = await writeGraphFiles(ctx.cwd, graph, current);
 			const lines = [
-				"Session graph",
+				flags.has("--all") ? "Session graph (all)" : "Session graph (current component)",
 				"",
 				`Manifest: ${shortPath(manifestFile())}`,
 				`Records: ${graph.records.length}`,
@@ -254,6 +316,10 @@ export default function (pi: ExtensionAPI) {
 				`Roots: ${roots(graph).length}`,
 				`Leaves: ${leaves(graph).length}`,
 				`Fork points: ${forks(graph).length}`,
+				"",
+				"Wrote:",
+				shortPath(written.mdPath),
+				shortPath(written.mmdPath),
 				"",
 				"Recent edges:",
 			];
