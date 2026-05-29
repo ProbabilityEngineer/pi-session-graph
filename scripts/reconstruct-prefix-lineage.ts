@@ -47,6 +47,8 @@ type Candidate = {
   reasons: string[];
 };
 
+type ManifestLineageKind = "explicit-continuation" | "explicit-new-lineage" | "inferred-unresolved" | "inferred-prefix-candidate";
+
 type ManifestRecord = {
   ts?: string;
   sourceSession?: string;
@@ -273,9 +275,17 @@ async function main() {
     const match = record.sourceSession && record.destinationSession
       ? bestCandidates.find((entry) => entry.best.source === record.sourceSession && entry.best.destination === record.destinationSession)
       : undefined;
+    const kind: ManifestLineageKind = record.inferred
+      ? (match ? "inferred-prefix-candidate" : "inferred-unresolved")
+      : (match ? "explicit-continuation" : "explicit-new-lineage");
+    const recordConfidence = record.inferred ? (destination ? "medium" : "low") : (source && destination ? "high" : "medium");
+    const continuationConfidence = match ? match.best.confidence : "low";
     return {
       index: index + 1,
+      kind,
       inferred: Boolean(record.inferred),
+      recordConfidence,
+      continuationConfidence,
       fromCwd: record.fromCwd,
       toCwd: record.toCwd,
       source: record.sourceSession,
@@ -305,6 +315,10 @@ async function main() {
   const medium = bestCandidates.filter((e) => e.best.confidence === "medium");
   const low = bestCandidates.filter((e) => e.best.confidence === "low");
   const matchedManifest = manifestValidation.filter((v) => v.prefixMatched).length;
+  const manifestKindCounts = manifestValidation.reduce<Record<string, number>>((acc, record) => {
+    acc[record.kind] = (acc[record.kind] ?? 0) + 1;
+    return acc;
+  }, {});
   const report = [
     "# Prefix-based session lineage reconstruction",
     "",
@@ -316,6 +330,7 @@ async function main() {
     `Low confidence: ${low.length}`,
     `Fork sources: ${forkEntries.length}`,
     `Manifest records prefix-matched: ${matchedManifest}/${manifest.length}`,
+    ...Object.entries(manifestKindCounts).sort().map(([kind, count]) => `Manifest ${kind}: ${count}`),
     "",
     "## Best candidates",
     "",
@@ -335,7 +350,7 @@ async function main() {
     forkEntries.length > 80 ? `- ... ${forkEntries.length - 80} more` : "",
     "",
     "## Manifest validation",
-    ...manifestValidation.map((v) => `- #${v.index} ${v.inferred ? "inferred" : "explicit"} ${v.prefixMatched ? "prefix-matched" : "not-matched"}: ${v.fromCwd ?? ""} → ${v.toCwd ?? ""} (shared=${v.sharedLines ?? ""}, sourceCoverage=${v.sourceCoverage === undefined ? "" : v.sourceCoverage.toFixed(2)}, destCoverage=${v.destinationCoverage === undefined ? "" : v.destinationCoverage.toFixed(2)}, sourceExists=${v.sourceExists}, destExists=${v.destinationExists})`),
+    ...manifestValidation.map((v) => `- #${v.index} ${v.kind}: ${v.fromCwd ?? ""} → ${v.toCwd ?? ""} (recordConfidence=${v.recordConfidence}, continuationConfidence=${v.continuationConfidence}, shared=${v.sharedLines ?? ""}, sourceCoverage=${v.sourceCoverage === undefined ? "" : v.sourceCoverage.toFixed(2)}, destCoverage=${v.destinationCoverage === undefined ? "" : v.destinationCoverage.toFixed(2)}, sourceExists=${v.sourceExists}, destExists=${v.destinationExists})`),
     "",
     "Note: this uses exact source-file-as-prefix-of-destination-file matches and does not mutate session JSONLs or relocation manifests.",
     "",
