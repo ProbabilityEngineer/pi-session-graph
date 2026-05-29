@@ -9,7 +9,8 @@
     "lint": "tsc --noEmit",
     "reconstruct": "tsx scripts/reconstruct-local-history.ts",
     "validate-timeline": "tsx scripts/validate-session-timeline.ts",
-    "index-segments": "tsx scripts/index-session-segments.ts"
+    "index-segments": "tsx scripts/index-session-segments.ts",
+    "prefix-lineage": "tsx scripts/reconstruct-prefix-lineage.ts"
   },
   "keywords": [
     "pi",

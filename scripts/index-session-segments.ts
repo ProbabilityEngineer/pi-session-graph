@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? ".", ".pi", "agent");
@@ -29,6 +29,15 @@ type Segment = {
   isUniqueTail?: boolean;
 };
 
+type EdgeRank = {
+  edge: SegmentEdge;
+  score: number;
+  reasons: string[];
+  destinationExists: boolean;
+  isSelfEdge: boolean;
+  destinationBirthDeltaSeconds?: number;
+};
+
 type SegmentEdge = {
   fromSegment: string;
   toSession: string;
@@ -40,6 +49,9 @@ type SegmentEdge = {
   destinationsInSegment: number;
   class?: EdgeClass;
   repeatedInFiles?: number;
+  destinationExists?: boolean;
+  isSelfEdge?: boolean;
+  destinationBirthDeltaSeconds?: number;
 };
 
 type ManifestRecord = {
@@ -175,6 +187,27 @@ function edgeKey(source?: string, destination?: string): string {
   return `${source ?? ""}\n${destination ?? ""}`;
 }
 
+function isTruncatedPath(path: string): boolean {
+  return path.includes("/sessions/...") || path.includes("..._relocated_");
+}
+
+async function exists(path: string): Promise<boolean> {
+  if (isTruncatedPath(path)) return false;
+  try { await stat(path); return true; } catch { return false; }
+}
+
+async function birthtime(path: string): Promise<string | undefined> {
+  try { return (await stat(path)).birthtime.toISOString(); } catch { return undefined; }
+}
+
+function deltaSeconds(left?: string, right?: string): number | undefined {
+  if (!left || !right) return undefined;
+  const a = Date.parse(left);
+  const b = Date.parse(right);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
+  return Math.round((a - b) / 1000);
+}
+
 function fileTimestamp(date = new Date()): string {
   return date.toISOString().replaceAll(":", "-").replace(".", "-");
 }
@@ -223,19 +256,44 @@ async function main() {
   }
 
   const segmentById = new Map(allSegments.map((segment) => [segment.id, segment]));
+  const destinationBirthtimes = new Map<string, string | undefined>();
+  for (const destination of new Set(allEdges.map((edge) => edge.destination))) {
+    destinationBirthtimes.set(destination, await birthtime(destination));
+  }
+  const rankedEdges: EdgeRank[] = [];
   for (const edge of allEdges) {
     const segment = segmentById.get(edge.fromSegment);
     edge.repeatedInFiles = segment?.repeatedInFiles;
+    edge.destinationExists = await exists(edge.destination);
+    edge.isSelfEdge = edge.evidenceSession === edge.destination;
+    edge.destinationBirthDeltaSeconds = deltaSeconds(segment?.endTs, destinationBirthtimes.get(edge.destination));
     const explicit = authoritativePairs.has(edgeKey(edge.evidenceSession, edge.destination));
     if (explicit) edge.class = "authoritativeManifest";
-    else if (edge.destinationsOnLine > 2 || edge.destinationsInSegment > 3) edge.class = "noisyCopiedEvidence";
+    else if (!edge.destinationExists || edge.isSelfEdge || edge.destinationsOnLine > 2 || edge.destinationsInSegment > 3) edge.class = "noisyCopiedEvidence";
     else if (segment?.class === "unique") edge.class = "uniqueSegmentEvidence";
     else if ((segment?.repeatedInFiles ?? 0) > 3) edge.class = "noisyCopiedEvidence";
     else edge.class = "duplicatedSegmentEvidence";
+
+    let score = 0;
+    const reasons: string[] = [];
+    if (explicit) { score += 100; reasons.push("manifest"); }
+    if (edge.destinationExists) { score += 20; reasons.push("destination-exists"); } else { score -= 50; reasons.push("missing-or-truncated-destination"); }
+    if (!edge.isSelfEdge) { score += 10; reasons.push("not-self"); } else { score -= 30; reasons.push("self-edge"); }
+    if (segment?.class === "unique") { score += 10; reasons.push("unique-segment"); }
+    if (edge.destinationsOnLine <= 1 && edge.destinationsInSegment <= 1) { score += 10; reasons.push("single-destination-evidence"); }
+    if (edge.destinationBirthDeltaSeconds !== undefined && Math.abs(edge.destinationBirthDeltaSeconds) <= 300) { score += 10; reasons.push("near-destination-birthtime"); }
+    rankedEdges.push({ edge, score, reasons, destinationExists: Boolean(edge.destinationExists), isSelfEdge: Boolean(edge.isSelfEdge), destinationBirthDeltaSeconds: edge.destinationBirthDeltaSeconds });
   }
 
   const usableEdges = allEdges.filter((edge) => edge.class === "authoritativeManifest" || edge.class === "uniqueSegmentEvidence");
   const suppressedEdges = allEdges.filter((edge) => edge.class === "duplicatedSegmentEvidence" || edge.class === "noisyCopiedEvidence");
+  const bestByDestination = [...rankedEdges.reduce<Map<string, EdgeRank>>((acc, ranked) => {
+    const current = acc.get(ranked.edge.destination);
+    if (!current || ranked.score > current.score) acc.set(ranked.edge.destination, ranked);
+    return acc;
+  }, new Map()).values()].sort((a, b) => b.score - a.score);
+  const manifestBackedSegmentEdges = rankedEdges.filter((ranked) => ranked.edge.class === "authoritativeManifest").sort((a, b) => b.score - a.score);
+  const segmentOnlyCandidates = bestByDestination.filter((ranked) => ranked.edge.class === "uniqueSegmentEvidence");
   const classCounts = allEdges.reduce<Record<string, number>>((acc, edge) => {
     acc[edge.class ?? "unclassified"] = (acc[edge.class ?? "unclassified"] ?? 0) + 1;
     return acc;
@@ -249,7 +307,7 @@ async function main() {
   const mdPath = join(outDir, `segments_${stamp}.md`);
   const latestJsonPath = join(outDir, "segments.json");
   const latestMdPath = join(outDir, "segments.md");
-  const payload = { generatedAt, sessions: sessionFiles.length, segments: allSegments, edges: allEdges, usableEdges, suppressedEdges, duplicatedSegments, uniqueTails };
+  const payload = { generatedAt, sessions: sessionFiles.length, segments: allSegments, edges: allEdges, rankedEdges, bestByDestination, manifestBackedSegmentEdges, segmentOnlyCandidates, usableEdges, suppressedEdges, duplicatedSegments, uniqueTails };
   const json = JSON.stringify(payload, null, 2);
   await writeFile(jsonPath, json);
   await writeFile(latestJsonPath, json);
@@ -262,6 +320,8 @@ async function main() {
     `Segments: ${allSegments.length}`,
     `Relocation evidence edges: ${allEdges.length}`,
     `Usable edges: ${usableEdges.length}`,
+    `Manifest-backed segment edges: ${manifestBackedSegmentEdges.length}`,
+    `Segment-only best candidates: ${segmentOnlyCandidates.length}`,
     `Suppressed copied/duplicated edges: ${suppressedEdges.length}`,
     `Duplicate segment groups: ${duplicatedSegments.length}`,
     `Unique/session tail candidates: ${uniqueTails.length}`,
@@ -269,8 +329,16 @@ async function main() {
     "## Edge classes",
     ...Object.entries(classCounts).sort().map(([klass, count]) => `- ${klass}: ${count}`),
     "",
+    "## Manifest-backed segment evidence",
+    ...manifestBackedSegmentEdges.slice(0, 80).map((ranked) => `- score=${ranked.score} ${short(ranked.edge.evidenceSession)}:${ranked.edge.evidenceLine} → ${short(ranked.edge.destination)} (${ranked.reasons.join(", ")})`),
+    manifestBackedSegmentEdges.length > 80 ? `- ... ${manifestBackedSegmentEdges.length - 80} more` : "",
+    "",
+    "## Segment-only best candidates",
+    ...segmentOnlyCandidates.slice(0, 80).map((ranked) => `- score=${ranked.score} Δbirth=${ranked.destinationBirthDeltaSeconds ?? ""} ${short(ranked.edge.evidenceSession)}:${ranked.edge.evidenceLine} → ${short(ranked.edge.destination)} (${ranked.reasons.join(", ")})`),
+    segmentOnlyCandidates.length > 80 ? `- ... ${segmentOnlyCandidates.length - 80} more` : "",
+    "",
     "## Usable relocation evidence edges",
-    ...usableEdges.slice(0, 120).map((edge) => `- [${edge.class}] ${short(edge.evidenceSession)}:${edge.evidenceLine} → ${short(edge.destination)}`),
+    ...usableEdges.slice(0, 120).map((edge) => `- [${edge.class}; exists=${edge.destinationExists}; self=${edge.isSelfEdge}; Δbirth=${edge.destinationBirthDeltaSeconds ?? ""}] ${short(edge.evidenceSession)}:${edge.evidenceLine} → ${short(edge.destination)}`),
     usableEdges.length > 120 ? `- ... ${usableEdges.length - 120} more` : "",
     "",
     "## Suppressed copied/duplicated evidence samples",
