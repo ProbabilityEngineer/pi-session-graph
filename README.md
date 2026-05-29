@@ -61,11 +61,14 @@ npm run reconstruct
 
 Trust model:
 
-- `~/.pi/agent/relocations.jsonl` explicit records are authoritative.
+- `~/.pi/agent/relocations.jsonl` explicit records are authoritative for records created after manifest tracking existed.
+- Pre-manifest relocations may include manual copy/edit session moves. Treat them as historical evidence, not as pi-relocate-authored manifest truth.
 - `npm run prefix-lineage` is the strongest reconstruction signal. It compares canonicalized session content and finds source/destination common prefixes, then writes timestamped `prefix-lineage_*.md/json` plus latest `prefix-lineage.md/json`.
 - `npm run validate-timeline` checks session file metadata, including filename timestamps, filesystem birthtime/mtime, line counts, and manifest timestamp consistency.
 - `npm run index-segments` is forensic. It logically segments copied sessions around relocation evidence and suppresses noisy copied transcript evidence where possible.
 - `npm run reconstruct` is legacy/diagnostic. It scans transcript relocation output and is intentionally treated as noisy because relocated sessions copy old outputs forward.
+
+Cwd/repo names are historical labels, not durable identity. Session file paths, session ids, manifest edges, timestamps, and content-prefix evidence are the reconstruction identities. Use curated labels/aliases for renamed folders or repos.
 
 Do not mutate Pi session JSONLs or blindly backfill `relocations.jsonl` from forensic scans. Promote inferred edges only through explicit review or curated sidecar data.
 
