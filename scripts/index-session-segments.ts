@@ -175,6 +175,10 @@ function edgeKey(source?: string, destination?: string): string {
   return `${source ?? ""}\n${destination ?? ""}`;
 }
 
+function fileTimestamp(date = new Date()): string {
+  return date.toISOString().replaceAll(":", "-").replace(".", "-");
+}
+
 async function main() {
   const sessionFiles = await walk(sessionsDir);
   const manifest = await readManifest();
@@ -238,9 +242,17 @@ async function main() {
   }, {});
 
   await mkdir(outDir, { recursive: true });
-  const generatedAt = new Date().toISOString();
+  const now = new Date();
+  const generatedAt = now.toISOString();
+  const stamp = fileTimestamp(now);
+  const jsonPath = join(outDir, `segments_${stamp}.json`);
+  const mdPath = join(outDir, `segments_${stamp}.md`);
+  const latestJsonPath = join(outDir, "segments.json");
+  const latestMdPath = join(outDir, "segments.md");
   const payload = { generatedAt, sessions: sessionFiles.length, segments: allSegments, edges: allEdges, usableEdges, suppressedEdges, duplicatedSegments, uniqueTails };
-  await writeFile(join(outDir, "segments.json"), JSON.stringify(payload, null, 2));
+  const json = JSON.stringify(payload, null, 2);
+  await writeFile(jsonPath, json);
+  await writeFile(latestJsonPath, json);
 
   const report = [
     "# Session segment index",
@@ -272,10 +284,13 @@ async function main() {
     "Note: this is a non-destructive sidecar index. Session JSONLs are not modified.",
     "",
   ].join("\n");
-  await writeFile(join(outDir, "segments.md"), report);
+  await writeFile(mdPath, report);
+  await writeFile(latestMdPath, report);
 
-  console.log(`Wrote ${join(outDir, "segments.json")}`);
-  console.log(`Wrote ${join(outDir, "segments.md")}`);
+  console.log(`Wrote ${jsonPath}`);
+  console.log(`Wrote ${mdPath}`);
+  console.log(`Updated ${latestJsonPath}`);
+  console.log(`Updated ${latestMdPath}`);
 }
 
 main().catch((err) => {
