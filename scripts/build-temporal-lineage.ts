@@ -218,23 +218,71 @@ async function build() {
 }
 
 function mermaid(report: Awaited<ReturnType<typeof build>>) {
-	const lines = ["flowchart TD"];
-	for (const edge of report.edges) {
-		const stateId = `s_${shortHash(`${edge.sourceSession}:${edge.ts}`)}`;
-		const eventId = `e_${shortHash(edge.id)}`;
-		const destId = `d_${shortHash(edge.destinationSession)}`;
-		const sourceText = `${label(edge.fromCwd, edge.sourceSession)} @ ${edge.ts.slice(0, 16)}<br/>lines≤ts: ${edge.sourceLinesAtEvent ?? "?"}<br/>current lines: ${edge.sourceCurrentLines ?? "?"}`;
-		const eventText = `${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}<br/>${edge.lineageKind ?? ""}`;
-		const destText = `${label(edge.toCwd, edge.destinationSession)}<br/>current lines: ${edge.destinationCurrentLines ?? "?"}`;
-		lines.push(`  ${stateId}["${sourceText}"]`);
-		lines.push(`  ${eventId}(("${eventText}"))`);
-		lines.push(`  ${destId}["${destText}"]`);
-		lines.push(`  ${stateId} --> ${eventId} --> ${destId}`);
+	const lines = ["flowchart LR"];
+	const sessionIds = new Map<string, string>();
+	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
+		const existing = sessionIds.get(path);
+		if (existing) return existing;
+		const id = `n_${shortHash(path)}`;
+		sessionIds.set(path, id);
+		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
+		return id;
 	}
-	lines.push("  classDef manifest fill:#dcfce7,stroke:#16a34a;");
-	lines.push("  classDef overlay fill:#fef9c3,stroke:#ca8a04;");
-	for (const edge of report.edges) lines.push(`  class e_${shortHash(edge.id)} ${edge.kind};`);
+	const edgesBySource = new Map<string, TemporalEdge[]>();
+	for (const edge of report.edges) {
+		const list = edgesBySource.get(edge.sourceSession) ?? [];
+		list.push(edge);
+		edgesBySource.set(edge.sourceSession, list);
+		sessionNode(edge.sourceSession, edge.fromCwd, edge.sourceCurrentLines);
+		sessionNode(edge.destinationSession, edge.toCwd, edge.destinationCurrentLines);
+	}
+	for (const [source, sourceEdges] of edgesBySource) {
+		sourceEdges.sort((a, b) => a.ts.localeCompare(b.ts));
+		const sourceId = sessionIds.get(source)!;
+		let previousState: string | undefined;
+		for (const edge of sourceEdges) {
+			const stateId = `s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)}`;
+			const destId = sessionIds.get(edge.destinationSession)!;
+			const edgeLabel = `${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}<br/>${edge.ts.slice(0, 16)}<br/>${edge.lineageKind ?? ""}`;
+			const stateLabel = `state @ ${edge.ts.slice(0, 16)}<br/>lines≤ts: ${edge.sourceLinesAtEvent ?? "?"}`;
+			lines.push(`  ${sourceId} -. progression .-> ${stateId}{{"${stateLabel}"}}`);
+			if (previousState) lines.push(`  ${previousState} -. later .-> ${stateId}`);
+			lines.push(`  ${stateId} -->|"${edgeLabel}"| ${destId}`);
+			previousState = stateId;
+		}
+	}
+	lines.push("  classDef session fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px;");
+	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
+	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
+	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
+}
+
+function html(report: Awaited<ReturnType<typeof build>>, mmd: string) {
+	return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Temporal session lineage</title>
+<script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'; mermaid.initialize({ startOnLoad: true, securityLevel: 'loose' });</script>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;line-height:1.4}.legend{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem}.mermaid{border:1px solid #e5e7eb;border-radius:8px;padding:1rem;overflow:auto}code{background:#f3f4f6;padding:0.1rem 0.25rem;border-radius:4px}</style>
+</head>
+<body>
+<h1>Temporal session lineage</h1>
+<p>Generated: ${report.generatedAt}</p>
+<div class="legend">
+<ul>
+<li><strong>Blue boxes</strong>: session files/topology nodes.</li>
+<li><strong>Yellow diamonds</strong>: source-session states at specific relocation times.</li>
+<li><strong>Dotted arrows</strong>: progression inside the same append-only session file.</li>
+<li><strong>Solid arrows</strong>: relocation/fork edges to destination sessions.</li>
+<li><code>lines≤ts</code>: accumulated JSONL rows in the source session up to that relocation timestamp.</li>
+</ul>
+</div>
+<div class="mermaid">${mmd}</div>
+</body>
+</html>
+`;
 }
 
 function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
@@ -243,7 +291,7 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 		"",
 		`Generated: ${report.generatedAt}`,
 		"",
-		"This report models relocation events as time-indexed source-session states. It shows accumulated session lines up to each relocation timestamp where the source JSONL is available. It does not include transcript content.",
+		"This report models both topology and progression. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
 		"",
 		`Manifest: ${homeShort(report.inputs.manifestPath)}`,
 		`Overlay: ${homeShort(report.inputs.overlayPath)}`,
@@ -270,14 +318,17 @@ async function main() {
 	const report = await build();
 	const mmd = mermaid(report);
 	const md = markdown(report, mmd);
+	const htmlDoc = html(report, mmd);
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 	for (const [name, content] of [
 		["temporal-lineage.json", JSON.stringify(report, null, 2) + "\n"],
 		["temporal-lineage.mmd", mmd + "\n"],
 		["temporal-lineage.md", md],
+		["temporal-lineage.html", htmlDoc],
 		[`temporal-lineage_${stamp}.json`, JSON.stringify(report, null, 2) + "\n"],
 		[`temporal-lineage_${stamp}.mmd`, mmd + "\n"],
 		[`temporal-lineage_${stamp}.md`, md],
+		[`temporal-lineage_${stamp}.html`, htmlDoc],
 	] as const) await writeFile(join(outputDir, name), content);
 	console.log(`Wrote temporal lineage with ${report.edges.length} edges to ${outputDir}`);
 }
