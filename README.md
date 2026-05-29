@@ -60,6 +60,7 @@ These scripts are read-only with respect to Pi session JSONLs and relocation man
 
 ```bash
 npm run prefix-lineage
+npm run temporal-lineage
 npm run validate-timeline
 npm run index-segments
 npm run reconstruct
@@ -70,6 +71,7 @@ Trust model:
 - `~/.pi/agent/relocations.jsonl` explicit records are authoritative for records created after manifest tracking existed.
 - Pre-manifest relocations may include manual copy/edit session moves. Treat them as historical evidence, not as pi-relocate-authored manifest truth.
 - `npm run prefix-lineage` is the strongest reconstruction signal. It compares canonicalized session content and finds source/destination common prefixes, then writes timestamped `prefix-lineage_*.md/json` plus latest `prefix-lineage.md/json`.
+- `npm run temporal-lineage` writes `temporal-lineage.md/json/mmd`. It models relocation events as time-indexed source-session states and reports accumulated JSONL line counts at each relocation timestamp without transcript content.
 - `npm run validate-timeline` checks session file metadata, including filename timestamps, filesystem birthtime/mtime, line counts, and manifest timestamp consistency.
 - `npm run index-segments` is forensic. It logically segments copied sessions around relocation evidence and suppresses noisy copied transcript evidence where possible.
 - `npm run reconstruct` is legacy/diagnostic. It scans transcript relocation output and is intentionally treated as noisy because relocated sessions copy old outputs forward.
