@@ -1,6 +1,6 @@
 ---
 id: psg-jfqu
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-29T22:07:14Z

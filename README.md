@@ -13,7 +13,7 @@ Session lineage graph tools for Pi.
 /session-graph [--all]
 ```
 
-## Data source
+## Data sources
 
 V1 consumes relocation records from:
 
@@ -21,7 +21,13 @@ V1 consumes relocation records from:
 ~/.pi/agent/relocations.jsonl
 ```
 
-It treats the graph as a forest of session nodes and relocation edges. Inferred records are displayed separately from explicit records when present in the manifest.
+It also reads optional curated overlay records from:
+
+```text
+~/.pi/agent/session-graph/lineage-overlays.jsonl
+```
+
+Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, and cwd aliases without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
 
 `/session-leaves` and `/session-graph` default to the current connected component. Use `--all` to include every known session tree.
 

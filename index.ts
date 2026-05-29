@@ -4,6 +4,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 const MANIFEST = "relocations.jsonl";
+const OVERLAYS = "session-graph/lineage-overlays.jsonl";
 
 type RelocationRecord = {
 	ts: string;
@@ -15,7 +16,15 @@ type RelocationRecord = {
 	replacements?: number | null;
 	inferred?: boolean;
 	confidence?: string;
+	lineageKind?: string;
+	overlay?: boolean;
 };
+
+type OverlayRecord =
+	| { kind: "root"; session: string; historicalCwd?: string; label?: string; confidence?: string }
+	| { kind: "edge"; source: string; destination: string; fromCwd?: string; toCwd?: string; ts?: string; confidence?: string; lineageKind?: string }
+	| { kind: "alias"; path: string; label: string; note?: string }
+	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
 type SessionNode = {
 	id: string;
@@ -29,6 +38,8 @@ type Graph = {
 	nodes: Map<string, SessionNode>;
 	children: Map<string, RelocationRecord[]>;
 	byDestination: Map<string, RelocationRecord>;
+	overlays: OverlayRecord[];
+	aliases: Map<string, string>;
 };
 
 function agentDir() {
@@ -37,6 +48,10 @@ function agentDir() {
 
 function manifestFile() {
 	return join(agentDir(), MANIFEST);
+}
+
+function overlayFile() {
+	return join(agentDir(), OVERLAYS);
 }
 
 function shortHash(value: string) {
@@ -59,6 +74,7 @@ function cwdLabel(cwd: string) {
 }
 
 function marker(record: RelocationRecord) {
+	if (record.overlay) return record.lineageKind ? `overlay/${record.lineageKind}` : "overlay";
 	return record.inferred ? "inferred" : "explicit";
 }
 
@@ -67,38 +83,73 @@ function parseFlags(args: string) {
 	return new Set(parts.map((part) => part.replace(/^['"]|['"]$/g, "")));
 }
 
-async function readManifest(): Promise<RelocationRecord[]> {
+async function readJsonl<T>(path: string): Promise<T[]> {
 	try {
-		const raw = await readFile(manifestFile(), "utf8");
+		const raw = await readFile(path, "utf8");
 		return raw
 			.split("\n")
 			.map((line) => line.trim())
 			.filter(Boolean)
-			.map((line) => JSON.parse(line) as RelocationRecord);
+			.map((line) => JSON.parse(line) as T);
 	} catch {
 		return [];
 	}
 }
 
-function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string) {
+async function readManifest(): Promise<RelocationRecord[]> {
+	return readJsonl<RelocationRecord>(manifestFile());
+}
+
+async function readOverlays(): Promise<OverlayRecord[]> {
+	return readJsonl<OverlayRecord>(overlayFile());
+}
+
+function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>()) {
 	if (!path || path.startsWith("(")) return;
-	if (!nodes.has(path)) nodes.set(path, { id: sessionId(path), path, cwd, label: cwdLabel(cwd) });
+	if (!nodes.has(path)) {
+		const base = cwdLabel(cwd);
+		const alias = aliases.get(cwd);
+		const label = alias && alias !== base ? `${base} (${alias})` : base;
+		nodes.set(path, { id: sessionId(path), path, cwd, label });
+	}
+}
+
+function overlayEdges(overlays: OverlayRecord[]): RelocationRecord[] {
+	return overlays.flatMap((record) => {
+		if (record.kind !== "edge") return [];
+		return [{
+			ts: record.ts ?? "(overlay)",
+			fromCwd: record.fromCwd ?? "(overlay/unknown)",
+			toCwd: record.toCwd ?? "(overlay/unknown)",
+			sourceSession: record.source,
+			destinationSession: record.destination,
+			inferred: true,
+			confidence: record.confidence,
+			lineageKind: record.lineageKind,
+			overlay: true,
+		} satisfies RelocationRecord];
+	});
 }
 
 async function buildGraph(): Promise<Graph> {
-	const records = await readManifest();
+	const manifestRecords = await readManifest();
+	const overlays = await readOverlays();
+	const aliases = new Map(overlays.filter((record) => record.kind === "alias").map((record) => [record.path, record.label]));
+	const roots = overlays.filter((record) => record.kind === "root");
+	const records = [...overlayEdges(overlays), ...manifestRecords];
 	const nodes = new Map<string, SessionNode>();
 	const children = new Map<string, RelocationRecord[]>();
 	const byDestination = new Map<string, RelocationRecord>();
+	for (const root of roots) addNode(nodes, root.session, root.historicalCwd ?? root.label ?? "(overlay/root)", aliases);
 	for (const record of records) {
-		addNode(nodes, record.sourceSession, record.fromCwd);
-		addNode(nodes, record.destinationSession, record.toCwd);
+		addNode(nodes, record.sourceSession, record.fromCwd, aliases);
+		addNode(nodes, record.destinationSession, record.toCwd, aliases);
 		const list = children.get(record.sourceSession) ?? [];
 		list.push(record);
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination };
+	return { records, nodes, children, byDestination, overlays, aliases };
 }
 
 function currentSession(ctx: { sessionManager: { getSessionFile(): string | undefined } }) {
@@ -170,7 +221,7 @@ function componentGraph(graph: Graph, current?: string) {
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination };
+	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases };
 }
 
 function mermaid(graph: Graph, current?: string) {
@@ -257,6 +308,7 @@ export default function (pi: ExtensionAPI) {
 				`Generation/depth: ${lineage.length}`,
 				`Leaf: ${leaf ? "yes" : "no"}`,
 				`Records: ${graph.records.length}`,
+				`Overlay records: ${graph.overlays.length}`,
 				`Sessions: ${graph.nodes.size}`,
 				`Roots: ${roots(graph).length}`,
 				`Leaves: ${leaves(graph).length}`,
@@ -311,7 +363,9 @@ export default function (pi: ExtensionAPI) {
 				flags.has("--all") ? "Session graph (all)" : "Session graph (current component)",
 				"",
 				`Manifest: ${shortPath(manifestFile())}`,
+				`Overlay: ${shortPath(overlayFile())}`,
 				`Records: ${graph.records.length}`,
+				`Overlay records: ${graph.overlays.length}`,
 				`Sessions: ${graph.nodes.size}`,
 				`Roots: ${roots(graph).length}`,
 				`Leaves: ${leaves(graph).length}`,
