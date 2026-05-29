@@ -19,8 +19,19 @@ type SessionInfo = {
   mtime: string;
   lines: number;
   fullHash: string;
+  rawLines: string[];
   lineHashes: string[];
   prefixHashes: string[];
+};
+
+type Divergence = {
+  line: number;
+  sourceType?: string;
+  destinationType?: string;
+  sourceTimestamp?: string;
+  destinationTimestamp?: string;
+  sourceMissing: boolean;
+  destinationMissing: boolean;
 };
 
 type Candidate = {
@@ -30,6 +41,7 @@ type Candidate = {
   sourceLines: number;
   destinationLines: number;
   destinationTailLines: number;
+  firstDivergence?: Divergence;
   score: number;
   confidence: "high" | "medium" | "low";
   reasons: string[];
@@ -111,6 +123,16 @@ function short(path: string): string {
   return home && path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
 }
 
+function parseLineType(line?: string): string | undefined {
+  if (!line) return undefined;
+  try { return (JSON.parse(line) as { type?: string }).type; } catch { return undefined; }
+}
+
+function parseEntryTimestamp(line?: string): string | undefined {
+  if (!line) return undefined;
+  try { return (JSON.parse(line) as { timestamp?: string }).timestamp; } catch { return undefined; }
+}
+
 function deltaSeconds(a?: string, b?: string): number | undefined {
   if (!a || !b) return undefined;
   const left = Date.parse(a);
@@ -134,6 +156,7 @@ async function loadSession(path: string): Promise<SessionInfo> {
     mtime: st.mtime.toISOString(),
     lines: lines.length,
     fullHash: hashLines(lines),
+    rawLines: lines,
     lineHashes: lineHashes(lines),
     prefixHashes: prefixHashes(lines),
   };
@@ -144,6 +167,22 @@ async function readManifest(): Promise<ManifestRecord[]> {
   return raw.split("\n").map((line) => line.trim()).filter(Boolean).flatMap((line) => {
     try { return [JSON.parse(line) as ManifestRecord]; } catch { return []; }
   });
+}
+
+function firstDivergence(source: SessionInfo, dest: SessionInfo, sharedLines: number): Divergence | undefined {
+  if (sharedLines >= source.lines && sharedLines >= dest.lines) return undefined;
+  const index = sharedLines;
+  const sourceLine = source.rawLines[index];
+  const destinationLine = dest.rawLines[index];
+  return {
+    line: index + 1,
+    sourceType: parseLineType(sourceLine),
+    destinationType: parseLineType(destinationLine),
+    sourceTimestamp: parseEntryTimestamp(sourceLine),
+    destinationTimestamp: parseEntryTimestamp(destinationLine),
+    sourceMissing: sourceLine === undefined,
+    destinationMissing: destinationLine === undefined,
+  };
 }
 
 function commonPrefixLength(a: SessionInfo, b: SessionInfo): number {
@@ -180,6 +219,7 @@ function scoreCandidate(source: SessionInfo, dest: SessionInfo, manifestPairs: S
     sourceLines: source.lines,
     destinationLines: dest.lines,
     destinationTailLines: dest.lines - sharedLines,
+    firstDivergence: firstDivergence(source, dest, sharedLines),
     score,
     confidence,
     reasons,
@@ -283,6 +323,12 @@ async function main() {
     "|---|---:|---:|---:|---|---|---|",
     ...bestCandidates.sort((a, b) => b.best.score - a.best.score || b.best.sharedLines - a.best.sharedLines).slice(0, 200).map((entry) => `| ${entry.best.confidence}${entry.ambiguous ? " ambiguous" : ""} | ${entry.best.score} | ${entry.best.sharedLines} | ${entry.best.destinationTailLines} | \`${short(entry.best.source)}\` | \`${short(entry.best.destination)}\` | ${entry.best.reasons.join(", ")} |`),
     bestCandidates.length > 200 ? `\n... ${bestCandidates.length - 200} more` : "",
+    "",
+    "## First divergence for best candidates",
+    ...bestCandidates.sort((a, b) => b.best.score - a.best.score || b.best.sharedLines - a.best.sharedLines).slice(0, 80).map((entry) => {
+      const d = entry.best.firstDivergence;
+      return `- ${entry.best.confidence} score=${entry.best.score} line=${d?.line ?? "none"} sourceType=${d?.sourceType ?? "missing"} destType=${d?.destinationType ?? "missing"} sourceTs=${d?.sourceTimestamp ?? ""} destTs=${d?.destinationTimestamp ?? ""}: \`${short(entry.best.source)}\` → \`${short(entry.best.destination)}\``;
+    }),
     "",
     "## Forks",
     ...forkEntries.slice(0, 80).map(([source, edges]) => `- \`${short(source)}\` → ${edges.length} destinations`),
