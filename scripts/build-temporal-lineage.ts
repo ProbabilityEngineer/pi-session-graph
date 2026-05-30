@@ -384,7 +384,7 @@ function escapeHtml(value: string) {
 	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
+function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
 	const starts = selectedStarts(report, options);
 	const sessionPaths = new Set<string>();
 	for (const start of starts) sessionPaths.add(start.path);
@@ -392,9 +392,9 @@ function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allS
 		sessionPaths.add(edge.sourceSession);
 		sessionPaths.add(edge.destinationSession);
 	}
-	const rows = [...sessionPaths]
-		.map((path) => ({ path, label: label(undefined, path) }))
-		.sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path));
+	const rows = options.groupBy === "session"
+		? [...sessionPaths].map((path) => ({ path, label: label(undefined, path) })).sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
+		: [...new Set([...sessionPaths].map((path) => projectKey(path)))].map((key) => ({ path: key, label: key })).sort((a, b) => a.label.localeCompare(b.label));
 	const times = [
 		...starts.map((start) => Date.parse(start.ts)),
 		...report.edges.map((edge) => Date.parse(edge.ts)),
@@ -402,11 +402,35 @@ function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allS
 	return { starts, rows, minTime: Math.min(...times), maxTime: Math.max(...times) };
 }
 
-function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
+function projectKey(path: string, cwd?: string) {
+	return label(cwd, path);
+}
+
+function temporalInventoryJson(report: Awaited<ReturnType<typeof build>>) {
+	return {
+		generatedAt: report.generatedAt,
+		inputs: report.inputs,
+		sessions: Object.values(report.sessionStats)
+			.map((stats) => ({
+				path: stats.path,
+				label: label(undefined, stats.path),
+				startTimestamp: stats.startTimestamp,
+				firstTimestamp: stats.firstTimestamp,
+				lastTimestamp: stats.lastTimestamp,
+				currentLines: stats.currentLines,
+				exists: stats.exists,
+				bytes: stats.bytes,
+			}))
+			.sort((a, b) => (a.startTimestamp ?? "").localeCompare(b.startTimestamp ?? "") || a.label.localeCompare(b.label)),
+	};
+}
+
+function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
 	const data = timelineData(report, options);
 	return {
 		generatedAt: report.generatedAt,
 		inputs: report.inputs,
+		mode: options.groupBy ?? "project",
 		minTime: new Date(data.minTime).toISOString(),
 		maxTime: new Date(data.maxTime).toISOString(),
 		rows: data.rows,
@@ -415,7 +439,31 @@ function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options
 	};
 }
 
-function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
+function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
+	const lines = ["flowchart LR"];
+	for (const edge of report.edges) {
+		const stateId = `s_${shortHash(`${edge.sourceSession}:${edge.ts}`)}`;
+		const eventId = `e_${shortHash(edge.id)}`;
+		const destId = `d_${shortHash(edge.destinationSession)}`;
+		const sourceText = `${label(edge.fromCwd, edge.sourceSession)} @ ${edge.ts.slice(0, 16)}<br/>lines≤ts: ${edge.sourceLinesAtEvent ?? "?"}<br/>current lines: ${edge.sourceCurrentLines ?? "?"}`;
+		const eventText = `${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}<br/>${edge.lineageKind ?? ""}`;
+		const destText = `${label(edge.toCwd, edge.destinationSession)}<br/>current lines: ${edge.destinationCurrentLines ?? "?"}`;
+		lines.push(`  ${stateId}["${sourceText}"]`);
+		lines.push(`  ${eventId}(("${eventText}"))`);
+		lines.push(`  ${destId}["${destText}"]`);
+		lines.push(`  ${stateId} --> ${eventId} --> ${destId}`);
+	}
+	lines.push("  classDef manifest fill:#dcfce7,stroke:#16a34a;");
+	lines.push("  classDef overlay fill:#fef9c3,stroke:#ca8a04;");
+	for (const edge of report.edges) lines.push(`  class e_${shortHash(edge.id)} ${edge.kind};`);
+	return lines.join("\n");
+}
+
+function focusedHtml(report: Awaited<ReturnType<typeof build>>, mmd: string) {
+	return html(report, mmd).replace("<h1>Temporal session lineage</h1>", "<h1>Focused temporal lineage</h1>").replace("<div class=\"legend\">", "<div class=\"legend\"><p>Focused view: relocation/overlay progression only. No standalone session starts.</p>");
+}
+
+function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
 	const data = timelineData(report, options);
 	const left = 280;
 	const right = 80;
@@ -425,6 +473,7 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 	const height = top + data.rows.length * rowHeight + 80;
 	const span = Math.max(1, data.maxTime - data.minTime);
 	const rowY = new Map(data.rows.map((row, index) => [row.path, top + index * rowHeight]));
+	const rowFor = (path: string, cwd?: string) => options.groupBy === "session" ? path : projectKey(path, cwd);
 	const x = (ts: string) => left + ((Date.parse(ts) - data.minTime) / span) * (width - left - right);
 	const tickCount = 10;
 	const ticks = Array.from({ length: tickCount + 1 }, (_, index) => data.minTime + (span * index) / tickCount);
@@ -441,15 +490,27 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 		svg.push(`<text class="row" x="10" y="${y + 4}">${escapeHtml(row.label)}</text>`);
 		svg.push(`<line class="grid" x1="${left}" y1="${y}" x2="${width - right}" y2="${y}"/>`);
 	}
+	for (const row of data.rows) {
+		const rowStarts = data.starts.filter((start) => rowFor(start.path) === row.path);
+		const rowSessions = Object.values(report.sessionStats).filter((stats) => rowFor(stats.path) === row.path && stats.startTimestamp && stats.lastTimestamp);
+		const startMs = Math.min(...rowSessions.map((stats) => Date.parse(stats.startTimestamp!)).filter(Number.isFinite));
+		const endMs = Math.max(...rowSessions.map((stats) => Date.parse(stats.lastTimestamp!)).filter(Number.isFinite));
+		const y = rowY.get(row.path)!;
+		if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+			svg.push(`<line class="life" x1="${(left + ((startMs - data.minTime) / span) * (width - left - right)).toFixed(1)}" y1="${y}" x2="${(left + ((endMs - data.minTime) / span) * (width - left - right)).toFixed(1)}" y2="${y}"><title>${escapeHtml(`${row.label} active span ${new Date(startMs).toISOString()} to ${new Date(endMs).toISOString()}`)}</title></line>`);
+			svg.push(`<circle cx="${(left + ((endMs - data.minTime) / span) * (width - left - right)).toFixed(1)}" cy="${y}" r="3" fill="#1d4ed8"><title>${escapeHtml(`${row.label} last used ${new Date(endMs).toISOString()}`)}</title></circle>`);
+		}
+		void rowStarts;
+	}
 	for (const start of data.starts) {
-		const y = rowY.get(start.path);
+		const y = rowY.get(rowFor(start.path));
 		if (y === undefined) continue;
 		const sx = x(start.ts);
 		svg.push(`<circle class="start" cx="${sx.toFixed(1)}" cy="${y}" r="4"><title>${escapeHtml(`${start.ts} start ${start.label} lines=${start.currentLines}`)}</title></circle>`);
 	}
 	for (const edge of report.edges) {
-		const sy = rowY.get(edge.sourceSession);
-		const dy = rowY.get(edge.destinationSession);
+		const sy = rowY.get(rowFor(edge.sourceSession, edge.fromCwd));
+		const dy = rowY.get(rowFor(edge.destinationSession, edge.toCwd));
 		if (sy === undefined || dy === undefined) continue;
 		const ex = x(edge.ts);
 		svg.push(`<circle class="event" cx="${ex.toFixed(1)}" cy="${sy}" r="5"><title>${escapeHtml(`${edge.ts} ${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}: ${label(edge.fromCwd, edge.sourceSession)} -> ${label(edge.toCwd, edge.destinationSession)} lines≤ts=${edge.sourceLinesAtEvent ?? "?"}`)}</title></circle>`);
@@ -460,7 +521,7 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 <html><head><meta charset="utf-8"><title>Temporal session timeline</title>
 <script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/dist/svg-pan-zoom.min.js"></script>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;line-height:1.4}.legend,.controls{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0}.controls{position:sticky;top:0;z-index:10}button{margin-right:.5rem;padding:.35rem .7rem;border:1px solid #d1d5db;border-radius:6px;background:white;cursor:pointer}#wrap{height:82vh;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}svg{width:100%;height:100%}code{background:#f3f4f6;padding:.1rem .25rem;border-radius:4px}</style>
-</head><body><h1>Temporal session timeline</h1><p>Generated: ${report.generatedAt}</p><div class="legend"><ul><li>x-axis is real time, linearly scaled.</li><li>Each row is a session/project label.</li><li>Purple dots are session starts.</li><li>Yellow dots are relocation events on the source row.</li><li>Green curves connect relocation events to destination rows at the same timestamp.</li><li>Hover points/curves for details. No transcript content is included.</li></ul></div><div class="controls"><button id="zoom-in">Zoom in</button><button id="zoom-out">Zoom out</button><button id="reset">Fit/reset</button><span>Drag to pan. Mouse wheel/trackpad to zoom.</span></div><div id="wrap">${svg.join("\n")}</div><script>const svg=document.getElementById('timeline-svg'); window.panZoom=svgPanZoom(svg,{controlIconsEnabled:true,fit:true,center:true,minZoom:0.05,maxZoom:100,zoomScaleSensitivity:.25}); document.getElementById('zoom-in').onclick=()=>panZoom.zoomIn(); document.getElementById('zoom-out').onclick=()=>panZoom.zoomOut(); document.getElementById('reset').onclick=()=>{panZoom.resetZoom();panZoom.center();panZoom.fit();};</script></body></html>\n`;
+</head><body><h1>Temporal session timeline (${options.groupBy ?? "project"} rows)</h1><p>Generated: ${report.generatedAt}</p><div class="legend"><ul><li>x-axis is real time, linearly scaled.</li><li>Rows are ${options.groupBy === "session" ? "individual session files" : "project/folder labels"}.</li><li>Blue horizontal bars show active span from first start to last observed event on that row; dark-blue dots mark last used.</li><li>Purple dots are session starts.</li><li>Yellow dots are relocation events on the source row.</li><li>Green curves connect relocation events to destination rows at the same timestamp.</li><li>Hover points/curves for details. No transcript content is included.</li></ul></div><div class="controls"><button id="zoom-in">Zoom in</button><button id="zoom-out">Zoom out</button><button id="reset">Fit/reset</button><span>Drag to pan. Mouse wheel/trackpad to zoom.</span></div><div id="wrap">${svg.join("\n")}</div><script>const svg=document.getElementById('timeline-svg'); window.panZoom=svgPanZoom(svg,{controlIconsEnabled:true,fit:true,center:true,minZoom:0.05,maxZoom:100,zoomScaleSensitivity:.25}); document.getElementById('zoom-in').onclick=()=>panZoom.zoomIn(); document.getElementById('zoom-out').onclick=()=>panZoom.zoomOut(); document.getElementById('reset').onclick=()=>{panZoom.resetZoom();panZoom.center();panZoom.fit();};</script></body></html>\n`;
 }
 
 function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
@@ -500,15 +561,25 @@ async function main() {
 	const mmd = mermaid(report, { allStarts });
 	const md = markdown(report, mmd);
 	const htmlDoc = html(report, mmd);
-	const timelineJson = JSON.stringify(temporalTimelineJson(report, { allStarts }), null, 2) + "\n";
-	const timelineHtml = temporalTimelineHtml(report, { allStarts });
+	const focusedMmd = focusedMermaid(report);
+	const focusedDoc = focusedHtml(report, focusedMmd);
+	const timelineJson = JSON.stringify(temporalTimelineJson(report, { allStarts, groupBy: "project" }), null, 2) + "\n";
+	const timelineHtml = temporalTimelineHtml(report, { allStarts, groupBy: "project" });
+	const timelineSessionsJson = JSON.stringify(temporalTimelineJson(report, { allStarts, groupBy: "session" }), null, 2) + "\n";
+	const timelineSessionsHtml = temporalTimelineHtml(report, { allStarts, groupBy: "session" });
+	const inventoryJson = JSON.stringify(temporalInventoryJson(report), null, 2) + "\n";
 	const latestFiles = [
 		["temporal-lineage.json", JSON.stringify(report, null, 2) + "\n"],
 		["temporal-lineage.mmd", mmd + "\n"],
 		["temporal-lineage.md", md],
 		["temporal-lineage.html", htmlDoc],
+		["temporal-lineage-focused.mmd", focusedMmd + "\n"],
+		["temporal-lineage-focused.html", focusedDoc],
 		["temporal-timeline.json", timelineJson],
 		["temporal-timeline.html", timelineHtml],
+		["temporal-timeline-sessions.json", timelineSessionsJson],
+		["temporal-timeline-sessions.html", timelineSessionsHtml],
+		["temporal-inventory.json", inventoryJson],
 	] as const;
 	for (const [name, content] of latestFiles) await writeFile(join(outputDir, name), content);
 	let snapshotDir: string | undefined;
