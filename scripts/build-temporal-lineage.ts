@@ -441,21 +441,42 @@ function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options
 
 function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
 	const lines = ["flowchart LR"];
-	for (const edge of report.edges) {
-		const stateId = `s_${shortHash(`${edge.sourceSession}:${edge.ts}`)}`;
-		const eventId = `e_${shortHash(edge.id)}`;
-		const destId = `d_${shortHash(edge.destinationSession)}`;
-		const sourceText = `${label(edge.fromCwd, edge.sourceSession)} @ ${edge.ts.slice(0, 16)}<br/>lines≤ts: ${edge.sourceLinesAtEvent ?? "?"}<br/>current lines: ${edge.sourceCurrentLines ?? "?"}`;
-		const eventText = `${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}<br/>${edge.lineageKind ?? ""}`;
-		const destText = `${label(edge.toCwd, edge.destinationSession)}<br/>current lines: ${edge.destinationCurrentLines ?? "?"}`;
-		lines.push(`  ${stateId}["${sourceText}"]`);
-		lines.push(`  ${eventId}(("${eventText}"))`);
-		lines.push(`  ${destId}["${destText}"]`);
-		lines.push(`  ${stateId} --> ${eventId} --> ${destId}`);
+	const sessionIds = new Map<string, string>();
+	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
+		const existing = sessionIds.get(path);
+		if (existing) return existing;
+		const id = `n_${shortHash(path)}`;
+		sessionIds.set(path, id);
+		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
+		return id;
 	}
-	lines.push("  classDef manifest fill:#dcfce7,stroke:#16a34a;");
-	lines.push("  classDef overlay fill:#fef9c3,stroke:#ca8a04;");
-	for (const edge of report.edges) lines.push(`  class e_${shortHash(edge.id)} ${edge.kind};`);
+	const edgesBySource = new Map<string, TemporalEdge[]>();
+	for (const edge of report.edges) {
+		const list = edgesBySource.get(edge.sourceSession) ?? [];
+		list.push(edge);
+		edgesBySource.set(edge.sourceSession, list);
+		sessionNode(edge.sourceSession, edge.fromCwd, edge.sourceCurrentLines);
+		sessionNode(edge.destinationSession, edge.toCwd, edge.destinationCurrentLines);
+	}
+	for (const [source, sourceEdges] of edgesBySource) {
+		sourceEdges.sort((a, b) => a.ts.localeCompare(b.ts));
+		const sourceId = sessionIds.get(source)!;
+		let previousState: string | undefined;
+		for (const edge of sourceEdges) {
+			const stateId = `s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)}`;
+			const destId = sessionIds.get(edge.destinationSession)!;
+			const edgeLabel = `${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}<br/>${edge.ts.slice(0, 16)}<br/>${edge.lineageKind ?? ""}`;
+			const stateLabel = `state @ ${edge.ts.slice(0, 16)}<br/>lines≤ts: ${edge.sourceLinesAtEvent ?? "?"}`;
+			lines.push(`  ${sourceId} -. progression .-> ${stateId}{{"${stateLabel}"}}`);
+			if (previousState) lines.push(`  ${previousState} -. later .-> ${stateId}`);
+			lines.push(`  ${stateId} -->|"${edgeLabel}"| ${destId}`);
+			previousState = stateId;
+		}
+	}
+	lines.push("  classDef session fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px;");
+	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
+	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
+	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
 }
 
