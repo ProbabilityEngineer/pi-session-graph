@@ -486,13 +486,28 @@ function focusedHtml(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 <head>
 <meta charset="utf-8">
 <title>Focused temporal lineage</title>
-<script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'; mermaid.initialize({ startOnLoad: true, securityLevel: 'loose' });</script>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;line-height:1.4}.legend{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0}.mermaid{border:1px solid #e5e7eb;border-radius:8px;padding:1rem;overflow:auto}code{background:#f3f4f6;padding:.1rem .25rem;border-radius:4px}</style>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/dist/svg-pan-zoom.min.js"></script>
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+await mermaid.run({ querySelector: '.mermaid' });
+const svg = document.querySelector('.mermaid svg');
+if (svg && window.svgPanZoom) {
+  svg.style.width = '100%';
+  svg.style.height = '78vh';
+  window.panZoom = window.svgPanZoom(svg, { controlIconsEnabled: true, fit: true, center: true, minZoom: 0.05, maxZoom: 20, zoomScaleSensitivity: 0.25 });
+}
+document.getElementById('zoom-in')?.addEventListener('click', () => window.panZoom?.zoomIn());
+document.getElementById('zoom-out')?.addEventListener('click', () => window.panZoom?.zoomOut());
+document.getElementById('reset')?.addEventListener('click', () => { window.panZoom?.resetZoom(); window.panZoom?.center(); window.panZoom?.fit(); });
+</script>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;line-height:1.4}.legend,.controls{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0}.controls{position:sticky;top:0;z-index:10}button{margin-right:.5rem;padding:.35rem .7rem;border:1px solid #d1d5db;border-radius:6px;background:white;cursor:pointer}.mermaid{border:1px solid #e5e7eb;border-radius:8px;padding:1rem;overflow:hidden;height:80vh}code{background:#f3f4f6;padding:.1rem .25rem;border-radius:4px}</style>
 </head>
 <body>
 <h1>Focused temporal lineage</h1>
 <p>Generated: ${report.generatedAt}</p>
-<div class="legend"><p>Focused view: relocation/overlay progression only. This intentionally omits standalone session starts and uses the compact Mermaid rendering style from the early snapshot.</p></div>
+<div class="legend"><p>Focused view: relocation/overlay progression only. This intentionally omits standalone session starts and uses the compact Mermaid graph structure from the early snapshot.</p></div>
+<div class="controls"><button id="zoom-in">Zoom in</button><button id="zoom-out">Zoom out</button><button id="reset">Fit/reset</button><span>Drag to pan. Mouse wheel/trackpad to zoom.</span></div>
 <div class="mermaid">${mmd}</div>
 </body>
 </html>
