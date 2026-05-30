@@ -6,12 +6,7 @@
   "main": "index.ts",
   "types": "index.ts",
   "scripts": {
-    "lint": "tsc --noEmit",
-    "reconstruct": "tsx scripts/reconstruct-local-history.ts",
-    "validate-timeline": "tsx scripts/validate-session-timeline.ts",
-    "index-segments": "tsx scripts/index-session-segments.ts",
-    "prefix-lineage": "tsx scripts/reconstruct-prefix-lineage.ts",
-    "temporal-lineage": "tsx scripts/build-temporal-lineage.ts"
+    "lint": "tsc --noEmit"
   },
   "keywords": [
     "pi",
@@ -27,7 +22,6 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "latest",
     "@types/node": "latest",
-    "tsx": "^4.22.3",
     "typescript": "latest"
   },
   "pi": {

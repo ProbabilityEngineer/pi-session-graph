@@ -50,35 +50,15 @@ For local testing:
 pi -e ./index.ts
 ```
 
-## Reconstruction and forensic scripts
+## Reconstruction and canonical store tooling
 
-These scripts are read-only with respect to Pi session JSONLs and relocation manifests. They write sidecar reports under:
+Heavy reconstruction, backup extraction, temporal reports, and canonical store work now live in the companion repo:
 
 ```text
-~/.pi/agent/session-graph/
+/Users/sam/git/agents/agent-session-store
 ```
 
-```bash
-npm run prefix-lineage
-npm run temporal-lineage
-npm run validate-timeline
-npm run index-segments
-npm run reconstruct
-```
-
-Trust model:
-
-- `~/.pi/agent/relocations.jsonl` explicit records are authoritative for records created after manifest tracking existed.
-- Pre-manifest relocations may include manual copy/edit session moves. Treat them as historical evidence, not as pi-relocate-authored manifest truth.
-- `npm run prefix-lineage` is the strongest reconstruction signal. It compares canonicalized session content and finds source/destination common prefixes, then writes timestamped `prefix-lineage_*.md/json` plus latest `prefix-lineage.md/json`.
-- `npm run temporal-lineage` writes latest aliases for focused lineage, topology lineage, project timeline, session timeline, and JSON inventory: `temporal-lineage*`, `temporal-timeline*`, and `temporal-inventory.json`. Use `npm run temporal-lineage -- --snapshot` to also write timestamped snapshots under `snapshots/temporal-lineage/`. The focused lineage graph is compact relocation/overlay progression only. The topology lineage graph also includes selected starts. The project timeline gives a linear, comparable time axis with project/folder rows, active-span bars, start dots, last-used dots, relocation events, and zoom/pan. The session timeline is the precise one-row-per-session-file variant. JSON inventory includes all discovered sessions. Legacy `inferred-unresolved` records are hidden from visuals by default; use `--include-unresolved` to render them for forensic debugging. No transcript content is included.
-- `npm run validate-timeline` checks session file metadata, including filename timestamps, filesystem birthtime/mtime, line counts, and manifest timestamp consistency.
-- `npm run index-segments` is forensic. It logically segments copied sessions around relocation evidence and suppresses noisy copied transcript evidence where possible.
-- `npm run reconstruct` is legacy/diagnostic. It scans transcript relocation output and is intentionally treated as noisy because relocated sessions copy old outputs forward.
-
-Cwd/repo names are historical labels, not durable identity. Session file paths, session ids, manifest edges, timestamps, and content-prefix evidence are the reconstruction identities. Use curated labels/aliases for renamed folders or repos.
-
-Do not mutate Pi session JSONLs or blindly backfill `relocations.jsonl` from forensic scans. Promote inferred edges only through explicit review or curated sidecar data.
+This extension should stay lightweight: slash commands and graph views over prepared relocation/session metadata. Do not mutate Pi session JSONLs or blindly backfill `relocations.jsonl` from forensic scans. Promote inferred edges only through explicit review or curated sidecar/store data.
 
 ## Development
 
