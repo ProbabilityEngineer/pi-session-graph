@@ -256,9 +256,13 @@ async function build() {
 	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
 }
 
-function selectedStarts(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
+function visibleEdges(report: Awaited<ReturnType<typeof build>>, options: { includeUnresolved?: boolean } = {}) {
+	return options.includeUnresolved ? report.edges : report.edges.filter((edge) => edge.lineageKind !== "inferred-unresolved");
+}
+
+function selectedStarts(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; includeUnresolved?: boolean } = {}) {
 	const connectedSessions = new Set<string>();
-	for (const edge of report.edges) {
+	for (const edge of visibleEdges(report, options)) {
 		connectedSessions.add(edge.sourceSession);
 		connectedSessions.add(edge.destinationSession);
 	}
@@ -287,7 +291,7 @@ function selectedStarts(report: Awaited<ReturnType<typeof build>>, options: { al
 	return options.allStarts ? report.sessionStarts : report.sessionStarts.filter((start) => connectedSessions.has(start.path) || importantStandalone(start));
 }
 
-function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean } = {}) {
+function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; includeUnresolved?: boolean } = {}) {
 	const lines = ["flowchart LR"];
 	const sessionIds = new Map<string, string>();
 	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
@@ -298,6 +302,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
+	const edges = visibleEdges(report, options);
 	const starts = selectedStarts(report, options);
 	for (const start of starts) {
 		const nodeId = sessionNode(start.path, undefined, start.currentLines);
@@ -306,7 +311,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 		lines.push(`  ${startId} --> ${nodeId}`);
 	}
 	const edgesBySource = new Map<string, TemporalEdge[]>();
-	for (const edge of report.edges) {
+	for (const edge of edges) {
 		const list = edgesBySource.get(edge.sourceSession) ?? [];
 		list.push(edge);
 		edgesBySource.set(edge.sourceSession, list);
@@ -333,7 +338,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
 	for (const start of starts) lines.push(`  class start_${shortHash(start.path)} start;`);
 	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
-	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
+	for (const edge of edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
 }
 
@@ -384,11 +389,12 @@ function escapeHtml(value: string) {
 	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
+function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; includeUnresolved?: boolean; groupBy?: "project" | "session" } = {}) {
 	const starts = selectedStarts(report, options);
 	const sessionPaths = new Set<string>();
 	for (const start of starts) sessionPaths.add(start.path);
-	for (const edge of report.edges) {
+	const edges = visibleEdges(report, options);
+	for (const edge of edges) {
 		sessionPaths.add(edge.sourceSession);
 		sessionPaths.add(edge.destinationSession);
 	}
@@ -397,7 +403,7 @@ function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allS
 		: [...new Set([...sessionPaths].map((path) => projectKey(path)))].map((key) => ({ path: key, label: key })).sort((a, b) => a.label.localeCompare(b.label));
 	const times = [
 		...starts.map((start) => Date.parse(start.ts)),
-		...report.edges.map((edge) => Date.parse(edge.ts)),
+		...edges.map((edge) => Date.parse(edge.ts)),
 	].filter((time) => Number.isFinite(time));
 	return { starts, rows, minTime: Math.min(...times), maxTime: Math.max(...times) };
 }
@@ -425,7 +431,7 @@ function temporalInventoryJson(report: Awaited<ReturnType<typeof build>>) {
 	};
 }
 
-function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
+function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; includeUnresolved?: boolean; groupBy?: "project" | "session" } = {}) {
 	const data = timelineData(report, options);
 	return {
 		generatedAt: report.generatedAt,
@@ -435,11 +441,11 @@ function temporalTimelineJson(report: Awaited<ReturnType<typeof build>>, options
 		maxTime: new Date(data.maxTime).toISOString(),
 		rows: data.rows,
 		starts: data.starts,
-		edges: report.edges,
+		edges: visibleEdges(report, options),
 	};
 }
 
-function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
+function focusedMermaid(report: Awaited<ReturnType<typeof build>>, options: { includeUnresolved?: boolean } = {}) {
 	const lines = ["flowchart LR"];
 	const sessionIds = new Map<string, string>();
 	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
@@ -450,8 +456,9 @@ function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
 		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
+	const edges = visibleEdges(report, options);
 	const edgesBySource = new Map<string, TemporalEdge[]>();
-	for (const edge of report.edges) {
+	for (const edge of edges) {
 		const list = edgesBySource.get(edge.sourceSession) ?? [];
 		list.push(edge);
 		edgesBySource.set(edge.sourceSession, list);
@@ -476,7 +483,7 @@ function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
 	lines.push("  classDef session fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px;");
 	lines.push("  classDef state fill:#fef3c7,stroke:#d97706;");
 	for (const id of sessionIds.values()) lines.push(`  class ${id} session;`);
-	for (const edge of report.edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
+	for (const edge of edges) lines.push(`  class s_${shortHash(`${edge.sourceSession}:${edge.ts}:${edge.id}`)} state;`);
 	return lines.join("\n");
 }
 
@@ -514,7 +521,7 @@ document.getElementById('reset')?.addEventListener('click', () => { window.panZo
 `;
 }
 
-function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
+function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; includeUnresolved?: boolean; groupBy?: "project" | "session" } = {}) {
 	const data = timelineData(report, options);
 	const left = 280;
 	const right = 80;
@@ -559,7 +566,7 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 		const sx = x(start.ts);
 		svg.push(`<circle class="start" cx="${sx.toFixed(1)}" cy="${y}" r="4"><title>${escapeHtml(`${start.ts} start ${start.label} lines=${start.currentLines}`)}</title></circle>`);
 	}
-	for (const edge of report.edges) {
+	for (const edge of visibleEdges(report, options)) {
 		const sy = rowY.get(rowFor(edge.sourceSession, edge.fromCwd));
 		const dy = rowY.get(rowFor(edge.destinationSession, edge.toCwd));
 		if (sy === undefined || dy === undefined) continue;
@@ -607,17 +614,18 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 async function main() {
 	const snapshot = process.argv.includes("--snapshot");
 	const allStarts = process.argv.includes("--all-starts");
+	const includeUnresolved = process.argv.includes("--include-unresolved");
 	await mkdir(outputDir, { recursive: true });
 	const report = await build();
-	const mmd = mermaid(report, { allStarts });
+	const mmd = mermaid(report, { allStarts, includeUnresolved });
 	const md = markdown(report, mmd);
 	const htmlDoc = html(report, mmd);
-	const focusedMmd = focusedMermaid(report);
+	const focusedMmd = focusedMermaid(report, { includeUnresolved });
 	const focusedDoc = focusedHtml(report, focusedMmd);
-	const timelineJson = JSON.stringify(temporalTimelineJson(report, { allStarts, groupBy: "project" }), null, 2) + "\n";
-	const timelineHtml = temporalTimelineHtml(report, { allStarts, groupBy: "project" });
-	const timelineSessionsJson = JSON.stringify(temporalTimelineJson(report, { allStarts, groupBy: "session" }), null, 2) + "\n";
-	const timelineSessionsHtml = temporalTimelineHtml(report, { allStarts, groupBy: "session" });
+	const timelineJson = JSON.stringify(temporalTimelineJson(report, { allStarts, includeUnresolved, groupBy: "project" }), null, 2) + "\n";
+	const timelineHtml = temporalTimelineHtml(report, { allStarts, includeUnresolved, groupBy: "project" });
+	const timelineSessionsJson = JSON.stringify(temporalTimelineJson(report, { allStarts, includeUnresolved, groupBy: "session" }), null, 2) + "\n";
+	const timelineSessionsHtml = temporalTimelineHtml(report, { allStarts, includeUnresolved, groupBy: "session" });
 	const inventoryJson = JSON.stringify(temporalInventoryJson(report), null, 2) + "\n";
 	const latestFiles = [
 		["temporal-lineage.json", JSON.stringify(report, null, 2) + "\n"],
