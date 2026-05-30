@@ -460,7 +460,22 @@ function focusedMermaid(report: Awaited<ReturnType<typeof build>>) {
 }
 
 function focusedHtml(report: Awaited<ReturnType<typeof build>>, mmd: string) {
-	return html(report, mmd).replace("<h1>Temporal session lineage</h1>", "<h1>Focused temporal lineage</h1>").replace("<div class=\"legend\">", "<div class=\"legend\"><p>Focused view: relocation/overlay progression only. No standalone session starts.</p>");
+	return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Focused temporal lineage</title>
+<script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'; mermaid.initialize({ startOnLoad: true, securityLevel: 'loose' });</script>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:2rem;line-height:1.4}.legend{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0}.mermaid{border:1px solid #e5e7eb;border-radius:8px;padding:1rem;overflow:auto}code{background:#f3f4f6;padding:.1rem .25rem;border-radius:4px}</style>
+</head>
+<body>
+<h1>Focused temporal lineage</h1>
+<p>Generated: ${report.generatedAt}</p>
+<div class="legend"><p>Focused view: relocation/overlay progression only. This intentionally omits standalone session starts and uses the compact Mermaid rendering style from the early snapshot.</p></div>
+<div class="mermaid">${mmd}</div>
+</body>
+</html>
+`;
 }
 
 function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options: { allStarts?: boolean; groupBy?: "project" | "session" } = {}) {
