@@ -73,7 +73,23 @@ function sessionStartTimestamp(path: string) {
 
 function bucketLabel(session: string) {
 	const bucket = session.match(/\/sessions\/--(.+?)--\//)?.[1];
-	return bucket?.replace(/^Users-sam-git-/, "").replaceAll("-", "/");
+	if (!bucket) return undefined;
+	const rules: Array<[RegExp, (match: RegExpMatchArray) => string]> = [
+		[/^Users-sam-git-agents-(.+)$/, (match) => `agents/${match[1]}`],
+		[/^Users-sam-git-public-(.+)$/, (match) => `public/${match[1]}`],
+		[/^Users-sam-git-private-utilities-(.+)$/, (match) => `private/utilities/${match[1]}`],
+		[/^Users-sam-git-utilities-(.+)$/, (match) => `utilities/${match[1]}`],
+		[/^Users-sam-git-bespoke-thinking-(.+)$/, (match) => `bespoke-thinking/${match[1]}`],
+		[/^Users-sam-git-forks-(.+)$/, (match) => `forks/${match[1]}`],
+		[/^Users-sam-git-(.+)$/, (match) => match[1]],
+		[/^Users-sam-Documents-GitHub-(.+)$/, (match) => `Documents/GitHub/${match[1]}`],
+		[/^Users-sam-(.+)$/, (match) => `Users/sam/${match[1]}`],
+	];
+	for (const [pattern, format] of rules) {
+		const match = bucket.match(pattern);
+		if (match) return format(match);
+	}
+	return bucket;
 }
 
 function label(cwd: string | undefined, session: string) {
