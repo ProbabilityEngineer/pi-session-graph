@@ -18,6 +18,8 @@ type RelocationRecord = {
 	inferred?: boolean;
 	confidence?: string;
 	lineageKind?: string;
+	displayLabel?: string;
+	edgeType?: string;
 	overlay?: boolean;
 };
 
@@ -32,6 +34,8 @@ type StoreExport = {
 	edges?: { id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } }[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
+	logicalThreads?: { id: string; label?: string; metadata?: Record<string, unknown> }[];
+	threadMembers?: { threadId: string; sessionId: string; role?: string; ordinal?: number; metadata?: Record<string, unknown> }[];
 };
 
 type SessionNode = {
@@ -41,6 +45,8 @@ type SessionNode = {
 	label: string;
 };
 
+type LogicalThread = { id: string; label: string; members: { sessionPath: string; role?: string; ordinal?: number }[] };
+
 type Graph = {
 	records: RelocationRecord[];
 	nodes: Map<string, SessionNode>;
@@ -49,6 +55,7 @@ type Graph = {
 	overlays: OverlayRecord[];
 	aliases: Map<string, string>;
 	source: "store" | "legacy";
+	logicalThreads?: LogicalThread[];
 };
 
 function agentDir() {
@@ -87,8 +94,10 @@ function cwdLabel(cwd: string) {
 }
 
 function marker(record: RelocationRecord) {
-	if (record.overlay) return record.lineageKind ? `overlay/${record.lineageKind}` : "overlay";
-	return record.inferred ? "inferred" : "explicit";
+	const kind = record.displayLabel ?? record.lineageKind ?? record.edgeType;
+	if (record.overlay) return kind ? `overlay/${kind}` : "overlay";
+	if (record.inferred) return kind ? `inferred/${kind}` : "inferred";
+	return kind ? `explicit/${kind}` : "explicit";
 }
 
 function parseFlags(args: string) {
@@ -152,7 +161,7 @@ function overlayEdges(overlays: OverlayRecord[]): RelocationRecord[] {
 	});
 }
 
-function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[], aliases: Map<string, string>, source: Graph["source"]): Graph {
+function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[], aliases: Map<string, string>, source: Graph["source"], logicalThreads: LogicalThread[] = []): Graph {
 	const roots = overlays.filter((record) => record.kind === "root");
 	const nodes = new Map<string, SessionNode>();
 	const children = new Map<string, RelocationRecord[]>();
@@ -166,7 +175,7 @@ function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[]
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays, aliases, source };
+	return { records, nodes, children, byDestination, overlays, aliases, source, logicalThreads };
 }
 
 function buildStoreGraph(store: StoreExport): Graph | undefined {
@@ -181,6 +190,17 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 	const classificationByEdge = new Map((store.classifications ?? []).filter((item) => item.targetType === "edge").map((item) => [item.targetId, item]));
 	const records: RelocationRecord[] = [];
 	const overlays: OverlayRecord[] = [];
+	const logicalThreads: LogicalThread[] = (store.logicalThreads ?? []).map((thread) => ({
+		id: thread.id,
+		label: thread.label ?? thread.id,
+		members: (store.threadMembers ?? [])
+			.filter((member) => member.threadId === thread.id)
+			.sort((a, b) => (a.ordinal ?? 0) - (b.ordinal ?? 0))
+			.flatMap((member) => {
+				const session = sessionsById.get(member.sessionId);
+				return session ? [{ sessionPath: session.canonicalKey, role: member.role, ordinal: member.ordinal }] : [];
+			}),
+	}));
 	for (const edge of store.edges ?? []) {
 		const source = sessionsById.get(edge.sourceSessionId);
 		const target = sessionsById.get(edge.targetSessionId);
@@ -194,11 +214,13 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 			destinationSession: target.canonicalKey,
 			inferred: edge.confidence !== "authoritative",
 			confidence: edge.confidence,
-			lineageKind: classification?.metadata?.displayLabel ?? classification?.classification ?? edge.edgeType,
+			lineageKind: classification?.classification,
+			displayLabel: classification?.metadata?.displayLabel,
+			edgeType: edge.edgeType,
 			overlay: edge.provenance !== "pi-relocate-manifest",
 		});
 	}
-	const graph = graphFromRecords(records, overlays, new Map(), "store");
+	const graph = graphFromRecords(records, overlays, new Map(), "store", logicalThreads);
 	for (const session of store.sessions ?? []) {
 		const node = graph.nodes.get(session.canonicalKey);
 		const explicit = labelByTarget.get(session.id) ?? session.metadata?.displayName;
@@ -288,7 +310,7 @@ function componentGraph(graph: Graph, current?: string) {
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source };
+	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads };
 }
 
 function mermaid(graph: Graph, current?: string) {
@@ -302,7 +324,8 @@ function mermaid(graph: Graph, current?: string) {
 		const to = graph.nodes.get(record.destinationSession);
 		if (!from || !to) continue;
 		const style = record.inferred ? "-.->" : "-->";
-		lines.push(`  ${from.id} ${style}|${record.ts.slice(0, 10)}| ${to.id}`);
+		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType].filter(Boolean).join(" / ");
+		lines.push(`  ${from.id} ${style}|${edgeLabel}| ${to.id}`);
 	}
 	return lines.join("\n");
 }
@@ -325,6 +348,7 @@ async function writeGraphFiles(cwd: string, graph: Graph, current?: string) {
 		`Roots: ${roots(graph).length}`,
 		`Leaves: ${leaves(graph).length}`,
 		`Fork points: ${forks(graph).length}`,
+		`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
 		"",
 		"```mermaid",
 		mmd,
@@ -381,6 +405,7 @@ export default function (pi: ExtensionAPI) {
 				`Roots: ${roots(graph).length}`,
 				`Leaves: ${leaves(graph).length}`,
 				`Fork points: ${forks(graph).length}`,
+				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
@@ -440,6 +465,7 @@ export default function (pi: ExtensionAPI) {
 				`Roots: ${roots(graph).length}`,
 				`Leaves: ${leaves(graph).length}`,
 				`Fork points: ${forks(graph).length}`,
+				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
 				"",
 				"Wrote:",
 				shortPath(written.mdPath),

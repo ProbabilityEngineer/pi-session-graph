@@ -1,6 +1,6 @@
 ---
 id: psg-edge-class-labels
-status: open
+status: closed
 deps: []
 links:
   - git:github.com/ProbabilityEngineer/agent-session-store

@@ -34,7 +34,11 @@ If that is unavailable, it falls back to relocation records plus optional curate
 ~/.pi/agent/session-graph/lineage-overlays.jsonl
 ```
 
-The canonical store is produced by `git:github.com/ProbabilityEngineer/agent-session-store`. Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, cwd aliases, backup-derived session labels, and manifest classifications without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
+The canonical store is produced by `git:github.com/ProbabilityEngineer/agent-session-store`. SQLite remains canonical there; this extension reads the JSON export to stay lightweight and avoid runtime SQLite compatibility issues.
+
+Store-backed graph output preserves edge types/classifications such as `explicit-continuation`, `explicit-new-lineage`, and display labels like `context jump`. It also understands optional derived logical thread records when the store provides them.
+
+Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, cwd aliases, backup-derived session labels, and manifest classifications without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
 
 `/session-leaves` and `/session-graph` default to the current connected component. Use `--all` to include every known session tree.
 

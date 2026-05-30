@@ -1,6 +1,6 @@
 ---
 id: psg-sqlite-direct
-status: open
+status: closed
 deps: []
 links:
   - git:github.com/ProbabilityEngineer/agent-session-store
