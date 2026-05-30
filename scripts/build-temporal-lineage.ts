@@ -18,6 +18,7 @@ type OverlayRecord =
 	| { kind: "root"; session: string; historicalCwd?: string; label?: string; confidence?: string; evidence?: string[]; notes?: string[] }
 	| { kind: "edge"; source: string; destination: string; fromCwd?: string; toCwd?: string; ts?: string; confidence?: string; lineageKind?: string; evidence?: string[]; notes?: string[] }
 	| { kind: "alias"; path: string; label: string; note?: string }
+	| { kind: "session-label"; session?: string; sessionId?: string; cwd?: string; label?: string; source?: string; confidence?: string; note?: string }
 	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
 type SessionStats = {
@@ -104,8 +105,15 @@ function label(cwd: string | undefined, session: string) {
 	return bucketLabel(session) ?? basename(session).slice(0, 32);
 }
 
+function sessionIdFromPath(path: string) {
+	return basename(path).match(/_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_|\.|$)/)?.[1];
+}
+
 function labelFor(report: Awaited<ReturnType<typeof build>>, session: string, cwd?: string) {
 	if (cwd && !cwd.startsWith("(")) return label(cwd, session);
+	const curated = report.sessionLabelsBySession[session];
+	if (curated?.label) return curated.label;
+	if (curated?.cwd) return label(curated.cwd, session);
 	if (basename(session).includes("_relocated_")) return bucketLabel(session) ?? label(undefined, session);
 	return label(report.sessionStats[session]?.cwd, session);
 }
@@ -232,6 +240,9 @@ async function build() {
 	const overlays = await readJsonl<OverlayRecord>(overlayPath);
 	const discoveredSessions = await listSessionFiles();
 	const classifications = manifestClassifications(overlays);
+	const sessionLabels = overlays.filter((record): record is Extract<OverlayRecord, { kind: "session-label" }> => record.kind === "session-label");
+	const sessionLabelsBySession = Object.fromEntries(sessionLabels.filter((record) => record.session).map((record) => [record.session!, record]));
+	const sessionLabelsById = {};
 	const overlayEdges = overlays.filter((record): record is Extract<OverlayRecord, { kind: "edge" }> => record.kind === "edge");
 	const sessions = new Set<string>();
 	for (const record of manifest) {
@@ -299,7 +310,7 @@ async function build() {
 		.filter((record) => record.startTimestamp)
 		.map((record) => ({ path: record.path, ts: record.startTimestamp!, label: label(record.cwd, record.path), currentLines: record.currentLines, exists: record.exists }))
 		.sort((a, b) => a.ts.localeCompare(b.ts));
-	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
+	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionLabelsBySession, sessionLabelsById, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
 }
 
 function visibleEdges(report: Awaited<ReturnType<typeof build>>, options: { includeUnresolved?: boolean } = {}) {

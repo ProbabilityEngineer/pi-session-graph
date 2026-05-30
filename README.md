@@ -27,7 +27,7 @@ It also reads optional curated overlay records from:
 ~/.pi/agent/session-graph/lineage-overlays.jsonl
 ```
 
-Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, and cwd aliases without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
+Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, cwd aliases, backup-derived session labels, and manifest classifications without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
 
 `/session-leaves` and `/session-graph` default to the current connected component. Use `--all` to include every known session tree.
 
