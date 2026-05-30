@@ -1,6 +1,6 @@
 ---
 id: psg-store-compare
-status: open
+status: closed
 deps: [psg-store-read]
 links:
   - git:github.com/ProbabilityEngineer/agent-session-store

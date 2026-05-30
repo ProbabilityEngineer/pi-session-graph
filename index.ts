@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 
 const MANIFEST = "relocations.jsonl";
 const OVERLAYS = "session-graph/lineage-overlays.jsonl";
+const CURATED_STORE = "session-graph/curated-store.json";
 
 type RelocationRecord = {
 	ts: string;
@@ -26,6 +27,13 @@ type OverlayRecord =
 	| { kind: "alias"; path: string; label: string; note?: string }
 	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
+type StoreExport = {
+	sessions?: { id: string; canonicalKey: string; metadata?: { cwd?: string; displayName?: string } }[];
+	edges?: { id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } }[];
+	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
+	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
+};
+
 type SessionNode = {
 	id: string;
 	path: string;
@@ -40,6 +48,7 @@ type Graph = {
 	byDestination: Map<string, RelocationRecord>;
 	overlays: OverlayRecord[];
 	aliases: Map<string, string>;
+	source: "store" | "legacy";
 };
 
 function agentDir() {
@@ -52,6 +61,10 @@ function manifestFile() {
 
 function overlayFile() {
 	return join(agentDir(), OVERLAYS);
+}
+
+function curatedStoreFile() {
+	return join(agentDir(), CURATED_STORE);
 }
 
 function shortHash(value: string) {
@@ -81,6 +94,14 @@ function marker(record: RelocationRecord) {
 function parseFlags(args: string) {
 	const parts = args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
 	return new Set(parts.map((part) => part.replace(/^['"]|['"]$/g, "")));
+}
+
+async function readJson<T>(path: string): Promise<T | undefined> {
+	try {
+		return JSON.parse(await readFile(path, "utf8")) as T;
+	} catch {
+		return undefined;
+	}
 }
 
 async function readJsonl<T>(path: string): Promise<T[]> {
@@ -131,12 +152,8 @@ function overlayEdges(overlays: OverlayRecord[]): RelocationRecord[] {
 	});
 }
 
-async function buildGraph(): Promise<Graph> {
-	const manifestRecords = await readManifest();
-	const overlays = await readOverlays();
-	const aliases = new Map(overlays.filter((record) => record.kind === "alias").map((record) => [record.path, record.label]));
+function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[], aliases: Map<string, string>, source: Graph["source"]): Graph {
 	const roots = overlays.filter((record) => record.kind === "root");
-	const records = [...overlayEdges(overlays), ...manifestRecords];
 	const nodes = new Map<string, SessionNode>();
 	const children = new Map<string, RelocationRecord[]>();
 	const byDestination = new Map<string, RelocationRecord>();
@@ -149,7 +166,57 @@ async function buildGraph(): Promise<Graph> {
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays, aliases };
+	return { records, nodes, children, byDestination, overlays, aliases, source };
+}
+
+function buildStoreGraph(store: StoreExport): Graph | undefined {
+	const sessionsById = new Map((store.sessions ?? []).map((session) => [session.id, session]));
+	if (!sessionsById.size || !(store.edges ?? []).length) return undefined;
+	const labelByTarget = new Map<string, string>();
+	for (const label of store.labels ?? []) {
+		if (label.targetType !== "session") continue;
+		const previous = labelByTarget.get(label.targetId);
+		if (!previous || label.labelType === "lineage" || label.labelType === "display_name") labelByTarget.set(label.targetId, label.value);
+	}
+	const classificationByEdge = new Map((store.classifications ?? []).filter((item) => item.targetType === "edge").map((item) => [item.targetId, item]));
+	const records: RelocationRecord[] = [];
+	const overlays: OverlayRecord[] = [];
+	for (const edge of store.edges ?? []) {
+		const source = sessionsById.get(edge.sourceSessionId);
+		const target = sessionsById.get(edge.targetSessionId);
+		if (!source || !target) continue;
+		const classification = classificationByEdge.get(edge.id);
+		records.push({
+			ts: edge.timestamp ?? "(store)",
+			fromCwd: edge.metadata?.fromCwd ?? labelByTarget.get(source.id) ?? source.metadata?.cwd ?? "(store/unknown)",
+			toCwd: edge.metadata?.toCwd ?? labelByTarget.get(target.id) ?? target.metadata?.cwd ?? "(store/unknown)",
+			sourceSession: source.canonicalKey,
+			destinationSession: target.canonicalKey,
+			inferred: edge.confidence !== "authoritative",
+			confidence: edge.confidence,
+			lineageKind: classification?.metadata?.displayLabel ?? classification?.classification ?? edge.edgeType,
+			overlay: edge.provenance !== "pi-relocate-manifest",
+		});
+	}
+	const graph = graphFromRecords(records, overlays, new Map(), "store");
+	for (const session of store.sessions ?? []) {
+		const node = graph.nodes.get(session.canonicalKey);
+		const explicit = labelByTarget.get(session.id) ?? session.metadata?.displayName;
+		if (node && explicit) node.label = explicit;
+	}
+	return graph;
+}
+
+async function buildLegacyGraph(): Promise<Graph> {
+	const manifestRecords = await readManifest();
+	const overlays = await readOverlays();
+	const aliases = new Map(overlays.filter((record) => record.kind === "alias").map((record) => [record.path, record.label]));
+	return graphFromRecords([...overlayEdges(overlays), ...manifestRecords], overlays, aliases, "legacy");
+}
+
+async function buildGraph(): Promise<Graph> {
+	const store = await readJson<StoreExport>(curatedStoreFile());
+	return buildStoreGraph(store ?? {}) ?? await buildLegacyGraph();
 }
 
 function currentSession(ctx: { sessionManager: { getSessionFile(): string | undefined } }) {
@@ -221,7 +288,7 @@ function componentGraph(graph: Graph, current?: string) {
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases };
+	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source };
 }
 
 function mermaid(graph: Graph, current?: string) {
@@ -307,6 +374,7 @@ export default function (pi: ExtensionAPI) {
 				`Tracked: ${current && graph.byDestination.has(current) ? "yes" : "no"}`,
 				`Generation/depth: ${lineage.length}`,
 				`Leaf: ${leaf ? "yes" : "no"}`,
+				`Source: ${graph.source}`,
 				`Records: ${graph.records.length}`,
 				`Overlay records: ${graph.overlays.length}`,
 				`Sessions: ${graph.nodes.size}`,
@@ -362,8 +430,10 @@ export default function (pi: ExtensionAPI) {
 			const lines = [
 				flags.has("--all") ? "Session graph (all)" : "Session graph (current component)",
 				"",
-				`Manifest: ${shortPath(manifestFile())}`,
-				`Overlay: ${shortPath(overlayFile())}`,
+				`Source: ${graph.source}`,
+				`Store: ${shortPath(curatedStoreFile())}`,
+				`Manifest fallback: ${shortPath(manifestFile())}`,
+				`Overlay fallback: ${shortPath(overlayFile())}`,
 				`Records: ${graph.records.length}`,
 				`Overlay records: ${graph.overlays.length}`,
 				`Sessions: ${graph.nodes.size}`,
