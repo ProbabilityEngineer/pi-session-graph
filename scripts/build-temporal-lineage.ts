@@ -71,11 +71,18 @@ function sessionStartTimestamp(path: string) {
 	return match?.[1].replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z");
 }
 
+function bucketLabel(session: string) {
+	const bucket = session.match(/\/sessions\/--(.+?)--\//)?.[1];
+	return bucket?.replace(/^Users-sam-git-/, "").replaceAll("-", "/");
+}
+
 function label(cwd: string | undefined, session: string) {
 	if (cwd && !cwd.startsWith("(")) return basename(cwd) || cwd;
-	const bucket = session.match(/\/sessions\/--(.+?)--\//)?.[1];
-	if (bucket) return bucket.replace(/^Users-sam-git-/, "").replaceAll("-", "/");
-	return basename(session).slice(0, 32);
+	return bucketLabel(session) ?? basename(session).slice(0, 32);
+}
+
+function isTempSession(path: string) {
+	return path.includes("/var/folders/") || path.includes("/T/pi-precompact-test-") || path.includes("/T/pi-sessionstart-hook-");
 }
 
 async function listSessionFiles(root = sessionsDir) {
@@ -256,6 +263,28 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 		connectedSessions.add(edge.sourceSession);
 		connectedSessions.add(edge.destinationSession);
 	}
+	const bucketCounts = new Map<string, number>();
+	for (const start of report.sessionStarts) {
+		const bucket = bucketLabel(start.path);
+		if (bucket) bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
+	}
+	const bucketImportantPaths = new Set<string>();
+	const startsByBucket = new Map<string, typeof report.sessionStarts>();
+	for (const start of report.sessionStarts) {
+		const bucket = bucketLabel(start.path);
+		if (!bucket || connectedSessions.has(start.path) || isTempSession(start.path)) continue;
+		const list = startsByBucket.get(bucket) ?? [];
+		list.push(start);
+		startsByBucket.set(bucket, list);
+	}
+	for (const [bucket, starts] of startsByBucket) {
+		if ((bucketCounts.get(bucket) ?? 0) < 5) continue;
+		for (const start of starts.sort((a, b) => b.currentLines - a.currentLines || b.ts.localeCompare(a.ts)).slice(0, 3)) bucketImportantPaths.add(start.path);
+	}
+	function importantStandalone(start: (typeof report.sessionStarts)[number]) {
+		if (connectedSessions.has(start.path) || isTempSession(start.path)) return false;
+		return start.currentLines >= 500 || bucketImportantPaths.has(start.path);
+	}
 	const sessionIds = new Map<string, string>();
 	function sessionNode(path: string, cwd: string | undefined, currentLines: number | undefined) {
 		const existing = sessionIds.get(path);
@@ -265,7 +294,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
-	const starts = options.allStarts ? report.sessionStarts : report.sessionStarts.filter((start) => connectedSessions.has(start.path));
+	const starts = options.allStarts ? report.sessionStarts : report.sessionStarts.filter((start) => connectedSessions.has(start.path) || importantStandalone(start));
 	for (const start of starts) {
 		const nodeId = sessionNode(start.path, undefined, start.currentLines);
 		const startId = `start_${shortHash(start.path)}`;
@@ -318,7 +347,7 @@ function html(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 <p>Generated: ${report.generatedAt}</p>
 <div class="legend">
 <ul>
-<li><strong>Purple circles</strong>: session starts from JSONL filename timestamps. By default the diagram shows starts only for sessions connected to relocation/overlay edges, to avoid Mermaid browser size limits. The JSON/Markdown event data still includes all discovered starts.</li>
+<li><strong>Purple circles</strong>: session starts from JSONL filename timestamps. By default the diagram shows starts for sessions connected to relocation/overlay edges plus significant standalone sessions (current lines ≥ 500, or up to 3 largest starts from buckets with ≥ 5 sessions), excluding temp/test sessions. The JSON data still includes all discovered starts.</li>
 <li><strong>Blue boxes</strong>: session files/topology nodes.</li>
 <li><strong>Yellow diamonds</strong>: source-session states at specific relocation times.</li>
 <li><strong>Dotted arrows</strong>: progression inside the same append-only session file.</li>
@@ -338,7 +367,7 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 		"",
 		`Generated: ${report.generatedAt}`,
 		"",
-		"This report models both topology and progression. Purple circles are session starts from JSONL filename timestamps; the Mermaid diagram shows starts for relocation-connected sessions by default to avoid browser size limits, while JSON data includes all discovered starts. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
+		"This report models both topology and progression. Purple circles are session starts from JSONL filename timestamps; the Mermaid diagram shows relocation-connected starts plus significant standalone starts by default (current lines ≥ 500, or up to 3 largest starts from buckets with ≥ 5 sessions, excluding temp/test sessions), while JSON data includes all discovered starts. Blue boxes are session files. Yellow diamonds are time-indexed states of a source session at a relocation timestamp. Dotted arrows show progression within a session file; solid arrows show relocation/fork edges to destination sessions. It does not include transcript content.",
 		"",
 		`Manifest: ${homeShort(report.inputs.manifestPath)}`,
 		`Overlay: ${homeShort(report.inputs.overlayPath)}`,
