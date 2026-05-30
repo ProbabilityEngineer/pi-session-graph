@@ -27,6 +27,7 @@ type SessionStats = {
 	startTimestamp?: string;
 	firstTimestamp?: string;
 	lastTimestamp?: string;
+	cwd?: string;
 	bytes?: number;
 };
 
@@ -92,9 +93,21 @@ function bucketLabel(session: string) {
 	return bucket;
 }
 
+function cwdDisplay(cwd: string) {
+	if (cwd.startsWith(`${home}/git/`)) return cwd.slice(`${home}/git/`.length);
+	if (cwd.startsWith(`${home}/`)) return cwd.slice(`${home}/`.length);
+	return cwd;
+}
+
 function label(cwd: string | undefined, session: string) {
-	if (cwd && !cwd.startsWith("(")) return basename(cwd) || cwd;
+	if (cwd && !cwd.startsWith("(")) return cwdDisplay(cwd);
 	return bucketLabel(session) ?? basename(session).slice(0, 32);
+}
+
+function labelFor(report: Awaited<ReturnType<typeof build>>, session: string, cwd?: string) {
+	if (cwd && !cwd.startsWith("(")) return label(cwd, session);
+	if (basename(session).includes("_relocated_")) return bucketLabel(session) ?? label(undefined, session);
+	return label(report.sessionStats[session]?.cwd, session);
 }
 
 function isTempSession(path: string) {
@@ -129,6 +142,19 @@ async function readJsonl<T>(path: string): Promise<T[]> {
 	}
 }
 
+function rowCwd(row: unknown): string | undefined {
+	if (!row || typeof row !== "object") return undefined;
+	const obj = row as Record<string, unknown>;
+	const cwd = obj.cwd;
+	if (typeof cwd === "string") return cwd;
+	const session = obj.session;
+	if (session && typeof session === "object") {
+		const value = (session as Record<string, unknown>).cwd;
+		if (typeof value === "string") return value;
+	}
+	return undefined;
+}
+
 function rowTimestamp(row: unknown): string | undefined {
 	if (!row || typeof row !== "object") return undefined;
 	const obj = row as Record<string, unknown>;
@@ -150,11 +176,15 @@ async function sessionStats(path: string): Promise<SessionStats> {
 		let currentLines = 0;
 		let firstTimestamp: string | undefined;
 		let lastTimestamp: string | undefined;
+		let cwd: string | undefined;
 		for (const line of raw.split("\n")) {
 			if (!line.trim()) continue;
 			currentLines++;
 			try {
-				const ts = rowTimestamp(JSON.parse(line));
+				const row = JSON.parse(line);
+				const candidateCwd = rowCwd(row);
+				if (candidateCwd && (!cwd || candidateCwd.length > cwd.length)) cwd = candidateCwd;
+				const ts = rowTimestamp(row);
 				if (ts) {
 					firstTimestamp ??= ts;
 					lastTimestamp = ts;
@@ -163,7 +193,7 @@ async function sessionStats(path: string): Promise<SessionStats> {
 				// Ignore malformed forensic rows; preserve counts.
 			}
 		}
-		return { path, exists: true, currentLines, startTimestamp: sessionStartTimestamp(path), firstTimestamp, lastTimestamp, bytes: st.size };
+		return { path, exists: true, currentLines, startTimestamp: sessionStartTimestamp(path), firstTimestamp, lastTimestamp, cwd, bytes: st.size };
 	} catch {
 		return { path, exists: false, currentLines: 0 };
 	}
@@ -267,7 +297,7 @@ async function build() {
 	edges.sort((a, b) => a.ts.localeCompare(b.ts));
 	const sessionStarts = [...stats.values()]
 		.filter((record) => record.startTimestamp)
-		.map((record) => ({ path: record.path, ts: record.startTimestamp!, label: label(undefined, record.path), currentLines: record.currentLines, exists: record.exists }))
+		.map((record) => ({ path: record.path, ts: record.startTimestamp!, label: label(record.cwd, record.path), currentLines: record.currentLines, exists: record.exists }))
 		.sort((a, b) => a.ts.localeCompare(b.ts));
 	return { generatedAt: new Date().toISOString(), inputs: { manifestPath, overlayPath, sessionsDir }, sessionStats: Object.fromEntries(stats), sessionStarts, edges };
 }
@@ -315,7 +345,7 @@ function mermaid(report: Awaited<ReturnType<typeof build>>, options: { allStarts
 		if (existing) return existing;
 		const id = `n_${shortHash(path)}`;
 		sessionIds.set(path, id);
-		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
+		lines.push(`  ${id}["${labelFor(report, path, cwd)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
 	const edges = visibleEdges(report, options);
@@ -415,8 +445,8 @@ function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allS
 		sessionPaths.add(edge.destinationSession);
 	}
 	const rows = options.groupBy === "session"
-		? [...sessionPaths].map((path) => ({ path, label: label(undefined, path) })).sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
-		: [...new Set([...sessionPaths].map((path) => projectKey(path)))].map((key) => ({ path: key, label: key })).sort((a, b) => a.label.localeCompare(b.label));
+		? [...sessionPaths].map((path) => ({ path, label: labelFor(report, path) })).sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
+		: [...new Set([...sessionPaths].map((path) => projectKey(report, path)))].map((key) => ({ path: key, label: key })).sort((a, b) => a.label.localeCompare(b.label));
 	const times = [
 		...starts.map((start) => Date.parse(start.ts)),
 		...edges.map((edge) => Date.parse(edge.ts)),
@@ -424,8 +454,8 @@ function timelineData(report: Awaited<ReturnType<typeof build>>, options: { allS
 	return { starts, rows, minTime: Math.min(...times), maxTime: Math.max(...times) };
 }
 
-function projectKey(path: string, cwd?: string) {
-	return label(cwd, path);
+function projectKey(report: Awaited<ReturnType<typeof build>>, path: string, cwd?: string) {
+	return labelFor(report, path, cwd);
 }
 
 function temporalInventoryJson(report: Awaited<ReturnType<typeof build>>) {
@@ -435,7 +465,7 @@ function temporalInventoryJson(report: Awaited<ReturnType<typeof build>>) {
 		sessions: Object.values(report.sessionStats)
 			.map((stats) => ({
 				path: stats.path,
-				label: label(undefined, stats.path),
+				label: label(stats.cwd, stats.path),
 				startTimestamp: stats.startTimestamp,
 				firstTimestamp: stats.firstTimestamp,
 				lastTimestamp: stats.lastTimestamp,
@@ -469,7 +499,7 @@ function focusedMermaid(report: Awaited<ReturnType<typeof build>>, options: { in
 		if (existing) return existing;
 		const id = `n_${shortHash(path)}`;
 		sessionIds.set(path, id);
-		lines.push(`  ${id}["${label(cwd, path)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
+		lines.push(`  ${id}["${labelFor(report, path, cwd)}<br/>session<br/>current lines: ${currentLines ?? "?"}"]`);
 		return id;
 	}
 	const edges = visibleEdges(report, options);
@@ -547,7 +577,7 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 	const height = top + data.rows.length * rowHeight + 80;
 	const span = Math.max(1, data.maxTime - data.minTime);
 	const rowY = new Map(data.rows.map((row, index) => [row.path, top + index * rowHeight]));
-	const rowFor = (path: string, cwd?: string) => options.groupBy === "session" ? path : projectKey(path, cwd);
+	const rowFor = (path: string, cwd?: string) => options.groupBy === "session" ? path : projectKey(report, path, cwd);
 	const x = (ts: string) => left + ((Date.parse(ts) - data.minTime) / span) * (width - left - right);
 	const tickCount = 10;
 	const ticks = Array.from({ length: tickCount + 1 }, (_, index) => data.minTime + (span * index) / tickCount);
@@ -587,7 +617,7 @@ function temporalTimelineHtml(report: Awaited<ReturnType<typeof build>>, options
 		const dy = rowY.get(rowFor(edge.destinationSession, edge.toCwd));
 		if (sy === undefined || dy === undefined) continue;
 		const ex = x(edge.ts);
-		svg.push(`<circle class="event" cx="${ex.toFixed(1)}" cy="${sy}" r="5"><title>${escapeHtml(`${edge.ts} ${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}: ${label(edge.fromCwd, edge.sourceSession)} -> ${label(edge.toCwd, edge.destinationSession)} lines≤ts=${edge.sourceLinesAtEvent ?? "?"}`)}</title></circle>`);
+		svg.push(`<circle class="event" cx="${ex.toFixed(1)}" cy="${sy}" r="5"><title>${escapeHtml(`${edge.ts} ${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}: ${labelFor(report, edge.sourceSession, edge.fromCwd)} -> ${labelFor(report, edge.destinationSession, edge.toCwd)} lines≤ts=${edge.sourceLinesAtEvent ?? "?"}`)}</title></circle>`);
 		svg.push(`<path class="edge" d="M ${ex.toFixed(1)} ${sy} C ${(ex + 30).toFixed(1)} ${sy}, ${(ex + 30).toFixed(1)} ${dy}, ${ex.toFixed(1)} ${dy}"><title>${escapeHtml(edge.lineageKind ?? "relocation")}</title></path>`);
 	}
 	svg.push(`</svg>`);
@@ -620,7 +650,7 @@ function markdown(report: Awaited<ReturnType<typeof build>>, mmd: string) {
 		"",
 	];
 	for (const edge of report.edges) {
-		lines.push(`- ${edge.ts} ${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}: ${label(edge.fromCwd, edge.sourceSession)} -> ${label(edge.toCwd, edge.destinationSession)} (${edge.lineageKind ?? "unclassified"})`);
+		lines.push(`- ${edge.ts} ${edge.kind}${edge.manifestIndex ? ` #${edge.manifestIndex}` : ""}: ${labelFor(report, edge.sourceSession, edge.fromCwd)} -> ${labelFor(report, edge.destinationSession, edge.toCwd)} (${edge.lineageKind ?? "unclassified"})`);
 		lines.push(`  - source lines at event: ${edge.sourceLinesAtEvent ?? "unknown"}; source current lines: ${edge.sourceCurrentLines ?? "unknown"}; destination current lines: ${edge.destinationCurrentLines ?? "unknown"}`);
 	}
 	lines.push("");
