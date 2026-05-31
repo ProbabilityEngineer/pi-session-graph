@@ -1,0 +1,19 @@
+---
+id: psg-suite-docs
+status: open
+deps: []
+links: []
+created: 2026-05-31T15:10:00Z
+type: task
+priority: 2
+assignee: ProbabilityEngineer
+---
+# Document pi-session suite relationship
+
+Update pi-session-graph docs to explain its place in the pi-session suite.
+
+## Acceptance Criteria
+
+- README references `agent-session-store`/`pi-session-store`, `pi-session-relocate`, and `pi-session-repo-move`.
+- Graph remains documented as read-only viewer over prepared store exports.
+- Install examples use the aligned naming once packages exist.
