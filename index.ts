@@ -284,7 +284,8 @@ function forks(graph: Graph) {
 
 function formatHop(record: RelocationRecord, index: number, current?: string, files = false) {
 	const currentMark = record.destinationSession === current ? " current" : "";
-	const lines = [`${index}. [${marker(record)}] ${cwdLabel(record.fromCwd)} -> ${cwdLabel(record.toCwd)}${currentMark}`, `   ${record.ts}`];
+	const confidence = record.confidence ? ` confidence=${record.confidence}` : "";
+	const lines = [`${index}. [${marker(record)}${confidence}] ${cwdLabel(record.fromCwd)} -> ${cwdLabel(record.toCwd)}${currentMark}`, `   ${record.ts}`];
 	if (files) {
 		lines.push(`   source: ${shortPath(record.sourceSession)}`);
 		lines.push(`   dest:   ${shortPath(record.destinationSession)}`);
@@ -334,7 +335,7 @@ function mermaid(graph: Graph, current?: string) {
 		const to = graph.nodes.get(record.destinationSession);
 		if (!from || !to) continue;
 		const style = record.inferred ? "-.->" : "-->";
-		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType].filter(Boolean).join(" / ");
+		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
 		lines.push(`  ${from.id} ${style}|${edgeLabel}| ${to.id}`);
 	}
 	return lines.join("\n");
