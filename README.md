@@ -1,8 +1,8 @@
 # pi-session-graph
 
-Session lineage graph tools for Pi.
+Lightweight Pi extension for viewing prepared session lineage, logical thread, classification, and repo identity data.
 
-`pi-session-graph` reads Pi relocation/session metadata and shows lineages, leaves, forks, and graph summaries without mutating session JSONLs.
+`pi-session-graph` does not mutate raw session JSONLs and does not run heavy reconstruction. Heavy imports/reports live in `agent-session-store`.
 
 ## Commands
 
@@ -10,39 +10,45 @@ Session lineage graph tools for Pi.
 /session-status
 /session-lineage [--files]
 /session-leaves [--all]
+/session-repos
 /session-graph [--all]
 ```
 
 ## Data sources
 
-V1 consumes relocation records from:
-
-```text
-~/.pi/agent/relocations.jsonl
-```
-
-It first tries to read the canonical store export from:
+Preferred input:
 
 ```text
 ~/.pi/agent/session-graph/curated-store.json
 ```
 
-If that is unavailable, it falls back to relocation records plus optional curated overlays:
+This JSON is produced by `agent-session-store` via:
+
+```bash
+npm run build-store
+npm run export-graph
+```
+
+Fallback inputs:
 
 ```text
 ~/.pi/agent/relocations.jsonl
 ~/.pi/agent/session-graph/lineage-overlays.jsonl
 ```
 
-The canonical store is produced by `git:github.com/ProbabilityEngineer/agent-session-store`. SQLite remains canonical there; this extension reads the JSON export to stay lightweight and avoid runtime SQLite compatibility issues.
+## What it displays
 
-Store-backed graph output preserves edge types/classifications such as `explicit-continuation`, `explicit-new-lineage`, and display labels like `context jump`. It also understands optional derived logical thread records when the store provides them.
+- session nodes and relocation/overlay edges
+- current lineage, leaves, roots, and fork points
+- classifications/display labels from the canonical store
+- logical thread counts and membership-derived summaries
+- repo identity/event records when exported by `agent-session-store`
 
-Overlays add reconstructed pre-manifest roots/edges, manual relocation evidence, cwd aliases, backup-derived session labels, and manifest classifications without mutating the raw relocation manifest. The graph is treated as a forest of session-file nodes and relocation/overlay edges. Inferred and overlay records are displayed separately from explicit records.
+Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/archive events, and time-use reports are curated in `agent-session-store` and exported for display.
 
-`/session-leaves` and `/session-graph` default to the current connected component. Use `--all` to include every known session tree.
+## Artifacts
 
-`/session-graph` always writes timestamped files under the current repo:
+`/session-graph` writes timestamped Markdown and Mermaid files under the current repo:
 
 ```text
 session-graph/session_graph_<timestamp>.md
@@ -55,25 +61,17 @@ session-graph/graph_<timestamp>.mmd
 pi install git:github.com/ProbabilityEngineer/pi-session-graph
 ```
 
-For local testing:
+Local testing:
 
 ```bash
 pi -e ./index.ts
 ```
 
-## Reconstruction and canonical store tooling
+## Boundaries
 
-Heavy reconstruction, backup extraction, temporal reports, and canonical store work now live in the companion repo:
+- Does not mutate session JSONLs.
+- Does not rewrite `~/.pi/agent/relocations.jsonl`.
+- Does not infer repo identity from raw content.
+- Does not perform backup extraction/reconstruction.
 
-```text
-/Users/sam/git/agents/agent-session-store
-```
-
-This extension should stay lightweight: slash commands and graph views over prepared relocation/session metadata. Do not mutate Pi session JSONLs or blindly backfill `relocations.jsonl` from forensic scans. Promote inferred edges only through explicit review or curated sidecar/store data.
-
-## Development
-
-```bash
-npm install
-npm run lint
-```
+Use `agent-session-store` for canonical store rebuilds, repo identity curation, bucket reconciliation, graph exports, and reports.

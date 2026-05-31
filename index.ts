@@ -36,6 +36,9 @@ type StoreExport = {
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
 	logicalThreads?: { id: string; label?: string; metadata?: Record<string, unknown> }[];
 	threadMembers?: { threadId: string; sessionId: string; role?: string; ordinal?: number; metadata?: Record<string, unknown> }[];
+	repoIdentities?: { id: string; stableName: string; displayName?: string; description?: string; confidence?: string }[];
+	repoObservations?: { repoIdentityId: string; path?: string; bucket?: string; remoteUrl?: string; validFrom?: string; validTo?: string; confidence?: string }[];
+	repoEvents?: { eventType: string; repoIdentityId?: string; relatedRepoIdentityId?: string; fromPath?: string; toPath?: string; timestamp?: string; confidence?: string; manualReviewRequired?: boolean; summary?: string }[];
 };
 
 type SessionNode = {
@@ -46,6 +49,7 @@ type SessionNode = {
 };
 
 type LogicalThread = { id: string; label: string; members: { sessionPath: string; role?: string; ordinal?: number }[] };
+type RepoIdentity = { id: string; stableName: string; displayName?: string; description?: string; confidence?: string; observations: StoreExport["repoObservations"]; events: StoreExport["repoEvents"] };
 
 type Graph = {
 	records: RelocationRecord[];
@@ -56,6 +60,7 @@ type Graph = {
 	aliases: Map<string, string>;
 	source: "store" | "legacy";
 	logicalThreads?: LogicalThread[];
+	repoIdentities?: RepoIdentity[];
 };
 
 function agentDir() {
@@ -161,7 +166,7 @@ function overlayEdges(overlays: OverlayRecord[]): RelocationRecord[] {
 	});
 }
 
-function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[], aliases: Map<string, string>, source: Graph["source"], logicalThreads: LogicalThread[] = []): Graph {
+function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[], aliases: Map<string, string>, source: Graph["source"], logicalThreads: LogicalThread[] = [], repoIdentities: RepoIdentity[] = []): Graph {
 	const roots = overlays.filter((record) => record.kind === "root");
 	const nodes = new Map<string, SessionNode>();
 	const children = new Map<string, RelocationRecord[]>();
@@ -175,7 +180,7 @@ function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[]
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays, aliases, source, logicalThreads };
+	return { records, nodes, children, byDestination, overlays, aliases, source, logicalThreads, repoIdentities };
 }
 
 function buildStoreGraph(store: StoreExport): Graph | undefined {
@@ -201,6 +206,11 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 				return session ? [{ sessionPath: session.canonicalKey, role: member.role, ordinal: member.ordinal }] : [];
 			}),
 	}));
+	const repoIdentities: RepoIdentity[] = (store.repoIdentities ?? []).map((repo) => ({
+		...repo,
+		observations: (store.repoObservations ?? []).filter((obs) => obs.repoIdentityId === repo.id),
+		events: (store.repoEvents ?? []).filter((event) => event.repoIdentityId === repo.id || event.relatedRepoIdentityId === repo.id),
+	}));
 	for (const edge of store.edges ?? []) {
 		const source = sessionsById.get(edge.sourceSessionId);
 		const target = sessionsById.get(edge.targetSessionId);
@@ -220,7 +230,7 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 			overlay: edge.provenance !== "pi-relocate-manifest",
 		});
 	}
-	const graph = graphFromRecords(records, overlays, new Map(), "store", logicalThreads);
+	const graph = graphFromRecords(records, overlays, new Map(), "store", logicalThreads, repoIdentities);
 	for (const session of store.sessions ?? []) {
 		const node = graph.nodes.get(session.canonicalKey);
 		const explicit = labelByTarget.get(session.id) ?? session.metadata?.displayName;
@@ -310,7 +320,7 @@ function componentGraph(graph: Graph, current?: string) {
 		children.set(record.sourceSession, list);
 		byDestination.set(record.destinationSession, record);
 	}
-	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads };
+	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads, repoIdentities: graph.repoIdentities };
 }
 
 function mermaid(graph: Graph, current?: string) {
@@ -406,6 +416,7 @@ export default function (pi: ExtensionAPI) {
 				`Leaves: ${leaves(graph).length}`,
 				`Fork points: ${forks(graph).length}`,
 				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
+				`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
@@ -444,6 +455,22 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("session-repos", {
+		description: "Show repo identity records from the canonical store export.",
+		handler: async (_args, ctx) => {
+			const graph = await buildGraph();
+			const repos = graph.repoIdentities ?? [];
+			const lines = ["Repo identities", "", `Source: ${graph.source}`, `Count: ${repos.length}`, ""];
+			for (const repo of repos.slice(0, 30)) {
+				lines.push(`- ${repo.displayName ?? repo.stableName} (${repo.confidence ?? "unknown"})`, `  observations: ${repo.observations?.length ?? 0}; events: ${repo.events?.length ?? 0}`);
+				for (const event of (repo.events ?? []).slice(0, 3)) lines.push(`  - ${event.timestamp ?? "unknown"} ${event.eventType}: ${event.summary ?? `${event.fromPath ?? ""} -> ${event.toPath ?? ""}`.trim()}`);
+			}
+			if (repos.length > 30) lines.push(`... ${repos.length - 30} more`);
+			if (!repos.length) lines.push("No repo identity records found. Run agent-session-store build/export after adding repo-identities.jsonl.");
+			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
 	pi.registerCommand("session-graph", {
 		description: "Write timestamped session graph Markdown/Mermaid files and show a summary. Use --all for the full forest.",
 		handler: async (args, ctx) => {
@@ -466,6 +493,7 @@ export default function (pi: ExtensionAPI) {
 				`Leaves: ${leaves(graph).length}`,
 				`Fork points: ${forks(graph).length}`,
 				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
+				`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
 				"",
 				"Wrote:",
 				shortPath(written.mdPath),

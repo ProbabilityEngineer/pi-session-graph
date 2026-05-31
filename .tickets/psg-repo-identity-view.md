@@ -1,6 +1,6 @@
 ---
 id: psg-repo-identity-view
-status: open
+status: closed
 deps: []
 links:
   - git:github.com/ProbabilityEngineer/agent-session-store#ass-repo-identity-model
