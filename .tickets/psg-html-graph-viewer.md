@@ -21,3 +21,6 @@ Mermaid is useful for small/component graphs, but full session/provider/repo gra
 - Shows a visible legend and edge confidence/provenance details.
 - Keeps Markdown/Mermaid generation for small static exports.
 - Does not require adding custom HTML generation to every graph command; prefer one viewer over graph-export.json with selectable modes.
+- Can evolve toward generic memory/identity graph records described in `agent-memory-identity/docs/graph-viewer-requirements.md`.
+- Selecting a node/edge can show details/evidence/provenance when present.
+- Selected subgraphs can eventually be exported to JSON/Mermaid/Markdown.
