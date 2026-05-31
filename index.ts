@@ -324,6 +324,23 @@ function componentGraph(graph: Graph, current?: string) {
 	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads, repoIdentities: graph.repoIdentities };
 }
 
+function graphLegend() {
+	return [
+		"## Legend",
+		"",
+		"- `-->` explicit/authoritative continuation edge",
+		"- `-.->` inferred, derived, overlay, or lower-confidence edge",
+		"- `★` current session, when known",
+		"- edge label format: `date / edge type or classification / confidence`",
+		"- confidence values include `authoritative`, `high`, `medium`, `low`, and source-specific values such as `filename-and-session-bucket`",
+		"- `same_cwd_temporal`: low-confidence cross-provider continuity from same cwd and adjacent time order",
+		"- `same_repo_identity_temporal`: medium-confidence continuity from shared repo identity and adjacent time order",
+		"- `relocation`: explicit Pi relocation manifest edge",
+		"- `pre-manifest-inferred`: curated or reconstructed pre-manifest lineage edge",
+		"",
+	].join("\n");
+}
+
 function mermaid(graph: Graph, current?: string) {
 	const lines = ["graph TD"];
 	for (const node of graph.nodes.values()) {
@@ -338,6 +355,7 @@ function mermaid(graph: Graph, current?: string) {
 		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
 		lines.push(`  ${from.id} ${style}|${edgeLabel}| ${to.id}`);
 	}
+	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
 	return lines.join("\n");
 }
 
@@ -361,6 +379,7 @@ async function writeGraphFiles(cwd: string, graph: Graph, current?: string) {
 		`Fork points: ${forks(graph).length}`,
 		`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
 		"",
+		graphLegend(),
 		"```mermaid",
 		mmd,
 		"```",
