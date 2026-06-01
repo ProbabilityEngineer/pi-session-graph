@@ -7,11 +7,27 @@ Lightweight Pi extension for viewing prepared session lineage, logical thread, c
 ## Commands
 
 ```text
+/session-graph status
+/session-graph lineage [--files]
+/session-graph leaves [--all]
+/session-graph repos
+/session-graph mermaid [--all] [--min-confidence <level>] [--provider pi,codex] [--edge-type relocation]
+```
+
+Compatibility aliases remain available:
+
+```text
 /session-status
 /session-lineage [--files]
 /session-leaves [--all]
 /session-repos
-/session-graph [--all]
+```
+
+A CLI entrypoint is also exposed for non-chat graph/status use:
+
+```bash
+pi-session-graph status
+pi-session-graph mermaid --all
 ```
 
 ## Data sources
@@ -48,7 +64,7 @@ Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/
 
 ## Artifacts
 
-`/session-graph` writes timestamped Markdown and Mermaid files under the current repo:
+`/session-graph mermaid` and `pi-session-graph mermaid` write timestamped Markdown and Mermaid files under the current repo:
 
 ```text
 session-graph/session_graph_<timestamp>.md

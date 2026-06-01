@@ -1,6 +1,6 @@
 ---
 id: psg-extension-cli-split
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-01T14:20:00Z
@@ -81,3 +81,8 @@ Purpose:
 ## Boundary note
 
 The CLI/static app surface belongs here for rendering and navigation. Data preparation and heavy inference remain in `agent-session-store` / future `pi-session-store`.
+
+
+## Closure
+
+Implemented initial split: `/session-graph` now acts as a namespaced command while compatibility aliases remain; package exposes a `pi-session-graph` CLI entrypoint backed by shared graph/status functions. Larger HTML/temporal commands remain follow-up work.

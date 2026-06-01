@@ -9,5 +9,5 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["index.ts", "scripts/**/*.ts"]
+  "include": ["index.ts", "bin/**/*.ts", "scripts/**/*.ts"]
 }

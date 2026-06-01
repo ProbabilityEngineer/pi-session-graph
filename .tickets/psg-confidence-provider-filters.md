@@ -1,6 +1,6 @@
 ---
 id: psg-confidence-provider-filters
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-31T16:30:00Z
@@ -20,3 +20,8 @@ Add static graph filtering options before building an interactive HTML viewer.
 - Generated Markdown/Mermaid output records active filters in the legend/header.
 - Low-confidence cross-provider links can be hidden without changing the canonical store.
 - Document that slider/check-box UI is future HTML viewer work, not part of this ticket.
+
+
+## Closure
+
+Implemented static graph filters for `/session-graph mermaid`: `--min-confidence`, `--provider`, and `--edge-type`. Generated reports include active filter summaries. Interactive slider/check-box UI remains future HTML viewer work.

@@ -30,7 +30,7 @@ type OverlayRecord =
 	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
 type StoreExport = {
-	sessions?: { id: string; canonicalKey: string; metadata?: { cwd?: string; displayName?: string } }[];
+	sessions?: { id: string; canonicalKey: string; provider?: string; metadata?: { cwd?: string; displayName?: string; provider?: string } }[];
 	edges?: { id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } }[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
@@ -46,6 +46,7 @@ type SessionNode = {
 	path: string;
 	cwd: string;
 	label: string;
+	provider?: string;
 };
 
 type LogicalThread = { id: string; label: string; members: { sessionPath: string; role?: string; ordinal?: number }[] };
@@ -105,11 +106,13 @@ function marker(record: RelocationRecord) {
 	return kind ? `explicit/${kind}` : "explicit";
 }
 
-function parseFlags(args: string) {
-	const parts = args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
-	return new Set(parts.map((part) => part.replace(/^['"]|['"]$/g, "")));
+function parseArgs(args: string) {
+	return (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []).map((part) => part.replace(/^["']|["']$/g, ""));
 }
 
+function parseFlags(args: string) {
+	return new Set(parseArgs(args));
+}
 async function readJson<T>(path: string): Promise<T | undefined> {
 	try {
 		return JSON.parse(await readFile(path, "utf8")) as T;
@@ -139,13 +142,15 @@ async function readOverlays(): Promise<OverlayRecord[]> {
 	return readJsonl<OverlayRecord>(overlayFile());
 }
 
-function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>()) {
+function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>(), provider?: string) {
 	if (!path || path.startsWith("(")) return;
 	if (!nodes.has(path)) {
 		const base = cwdLabel(cwd);
 		const alias = aliases.get(cwd);
 		const label = alias && alias !== base ? `${base} (${alias})` : base;
-		nodes.set(path, { id: sessionId(path), path, cwd, label });
+		nodes.set(path, { id: sessionId(path), path, cwd, label, provider });
+	} else if (provider) {
+		nodes.get(path)!.provider = provider;
 	}
 }
 
@@ -235,6 +240,7 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		const node = graph.nodes.get(session.canonicalKey);
 		const explicit = labelByTarget.get(session.id) ?? session.metadata?.displayName;
 		if (node && explicit) node.label = explicit;
+		if (node) node.provider = session.provider ?? session.metadata?.provider;
 	}
 	return graph;
 }
@@ -293,6 +299,20 @@ function formatHop(record: RelocationRecord, index: number, current?: string, fi
 	return lines;
 }
 
+function rebuildGraph(graph: Graph, records: RelocationRecord[], nodes = graph.nodes): Graph {
+	const referenced = new Set(records.flatMap((record) => [record.sourceSession, record.destinationSession]));
+	const keptNodes = new Map([...nodes.entries()].filter(([path]) => referenced.has(path)));
+	const children = new Map<string, RelocationRecord[]>();
+	const byDestination = new Map<string, RelocationRecord>();
+	for (const record of records) {
+		const list = children.get(record.sourceSession) ?? [];
+		list.push(record);
+		children.set(record.sourceSession, list);
+		byDestination.set(record.destinationSession, record);
+	}
+	return { records, nodes: keptNodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads, repoIdentities: graph.repoIdentities };
+}
+
 function componentGraph(graph: Graph, current?: string) {
 	if (!current || !graph.nodes.has(current)) return graph;
 	const keep = new Set<string>([current]);
@@ -313,15 +333,62 @@ function componentGraph(graph: Graph, current?: string) {
 	}
 	const records = graph.records.filter((record) => keep.has(record.sourceSession) && keep.has(record.destinationSession));
 	const nodes = new Map([...graph.nodes.entries()].filter(([path]) => keep.has(path)));
-	const children = new Map<string, RelocationRecord[]>();
-	const byDestination = new Map<string, RelocationRecord>();
-	for (const record of records) {
-		const list = children.get(record.sourceSession) ?? [];
-		list.push(record);
-		children.set(record.sourceSession, list);
-		byDestination.set(record.destinationSession, record);
+	return rebuildGraph(graph, records, nodes);
+}
+
+type GraphFilters = { minConfidence?: string; providers?: Set<string>; edgeTypes?: Set<string> };
+
+const confidenceRank = new Map<string, number>([["low", 1], ["medium", 2], ["filename-and-session-bucket", 2], ["high", 3], ["authoritative", 4]]);
+
+function parseCsvOption(args: string[], name: string) {
+	const prefix = `${name}=`;
+	const inline = args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+	const index = args.indexOf(name);
+	const value = inline ?? (index >= 0 ? args[index + 1] : undefined);
+	return value ? new Set(value.split(",").map((part) => part.trim()).filter(Boolean)) : undefined;
+}
+
+function parseGraphFilters(args: string[]): GraphFilters {
+	const minIndex = args.indexOf("--min-confidence");
+	return {
+		minConfidence: args.find((arg) => arg.startsWith("--min-confidence="))?.split("=")[1] ?? (minIndex >= 0 ? args[minIndex + 1] : undefined),
+		providers: parseCsvOption(args, "--provider"),
+		edgeTypes: parseCsvOption(args, "--edge-type"),
+	};
+}
+
+function recordType(record: RelocationRecord) {
+	return record.edgeType ?? record.lineageKind ?? record.displayLabel ?? marker(record);
+}
+
+function recordPassesFilters(graph: Graph, record: RelocationRecord, filters: GraphFilters) {
+	if (filters.minConfidence) {
+		const threshold = confidenceRank.get(filters.minConfidence) ?? 0;
+		const rank = confidenceRank.get(record.confidence ?? "") ?? 0;
+		if (rank < threshold) return false;
 	}
-	return { records, nodes, children, byDestination, overlays: graph.overlays, aliases: graph.aliases, source: graph.source, logicalThreads: graph.logicalThreads, repoIdentities: graph.repoIdentities };
+	if (filters.edgeTypes?.size && !filters.edgeTypes.has(recordType(record))) return false;
+	if (filters.providers?.size) {
+		const fromProvider = graph.nodes.get(record.sourceSession)?.provider;
+		const toProvider = graph.nodes.get(record.destinationSession)?.provider;
+		if (!fromProvider && !toProvider) return false;
+		if (fromProvider && !filters.providers.has(fromProvider)) return false;
+		if (toProvider && !filters.providers.has(toProvider)) return false;
+	}
+	return true;
+}
+
+function filterGraph(graph: Graph, filters: GraphFilters) {
+	const records = graph.records.filter((record) => recordPassesFilters(graph, record, filters));
+	return rebuildGraph(graph, records);
+}
+
+function filterSummary(filters: GraphFilters) {
+	const parts: string[] = [];
+	if (filters.minConfidence) parts.push(`min-confidence=${filters.minConfidence}`);
+	if (filters.providers?.size) parts.push(`provider=${[...filters.providers].join(",")}`);
+	if (filters.edgeTypes?.size) parts.push(`edge-type=${[...filters.edgeTypes].join(",")}`);
+	return parts.length ? parts.join("; ") : "none";
 }
 
 function graphLegend() {
@@ -384,7 +451,7 @@ function timestamp() {
 	return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-async function writeGraphFiles(cwd: string, graph: Graph, current?: string) {
+async function writeGraphFiles(cwd: string, graph: Graph, current?: string, filters: GraphFilters = {}) {
 	const dir = join(cwd, "session-graph");
 	await mkdir(dir, { recursive: true });
 	const stamp = timestamp();
@@ -399,6 +466,7 @@ async function writeGraphFiles(cwd: string, graph: Graph, current?: string) {
 		`Leaves: ${leaves(graph).length}`,
 		`Fork points: ${forks(graph).length}`,
 		`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
+		`Active filters: ${filterSummary(filters)}`,
 		"",
 		graphLegend(),
 		"```mermaid",
@@ -432,120 +500,162 @@ async function listSessionFiles(root = join(agentDir(), "sessions")) {
 	return found;
 }
 
+function statusLines(graph: Graph, current: string | undefined, cwd = process.cwd()) {
+	const lineage = lineageFor(graph, current);
+	const leaf = current ? !graph.children.has(current) : false;
+	return [
+		"Session graph status",
+		"",
+		`Current cwd: ${shortPath(cwd)}`,
+		`Current session: ${current ? shortPath(current) : "(ephemeral)"}`,
+		`Current id: ${current ? sessionId(current) : "(none)"}`,
+		`Tracked: ${current && graph.byDestination.has(current) ? "yes" : "no"}`,
+		`Generation/depth: ${lineage.length}`,
+		`Leaf: ${leaf ? "yes" : "no"}`,
+		`Source: ${graph.source}`,
+		`Records: ${graph.records.length}`,
+		`Overlay records: ${graph.overlays.length}`,
+		`Sessions: ${graph.nodes.size}`,
+		`Roots: ${roots(graph).length}`,
+		`Leaves: ${leaves(graph).length}`,
+		`Fork points: ${forks(graph).length}`,
+		`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
+		`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
+	];
+}
+
+function lineageLines(graph: Graph, current: string | undefined, files = false) {
+	const lineage = lineageFor(graph, current);
+	const lines = ["Session lineage", "", `Current session: ${current ? shortPath(current) : "(ephemeral)"}`];
+	if (!current) lines.push("", "Current session is ephemeral.");
+	else if (!lineage.length) lines.push("", "Current session has no recorded ancestry.");
+	else {
+		lines.push("", "Current chain:");
+		for (const [index, record] of lineage.entries()) lines.push(...formatHop(record, index + 1, current, files));
+	}
+	return lines;
+}
+
+function leavesLines(graph: Graph, current: string | undefined, all = false) {
+	const view = all ? graph : componentGraph(graph, current);
+	const nodes = leaves(view).sort((a, b) => a.label.localeCompare(b.label));
+	const lines = [all ? "Session leaves (all)" : "Session leaves (current component)", ""];
+	for (const node of nodes) lines.push(`- ${node.label}${node.path === current ? " current" : ""} (${node.id})`);
+	if (!nodes.length) lines.push("(none)");
+	return lines;
+}
+
+function reposLines(graph: Graph) {
+	const repos = graph.repoIdentities ?? [];
+	const lines = ["Repo identities", "", `Source: ${graph.source}`, `Count: ${repos.length}`, ""];
+	for (const repo of repos.slice(0, 30)) {
+		lines.push(`- ${repo.displayName ?? repo.stableName} (${repo.confidence ?? "unknown"})`, `  observations: ${repo.observations?.length ?? 0}; events: ${repo.events?.length ?? 0}`);
+		for (const event of (repo.events ?? []).slice(0, 3)) lines.push(`  - ${event.timestamp ?? "unknown"} ${event.eventType}: ${event.summary ?? `${event.fromPath ?? ""} -> ${event.toPath ?? ""}`.trim()}`);
+	}
+	if (repos.length > 30) lines.push(`... ${repos.length - 30} more`);
+	if (!repos.length) lines.push("No repo identity records found. Run agent-session-store build/export after adding repo-identities.jsonl.");
+	return lines;
+}
+
+async function graphWriteLines(cwd: string, graph: Graph, current: string | undefined, all: boolean, filters: GraphFilters) {
+	const written = await writeGraphFiles(cwd, graph, current, filters);
+	const lines = [
+		all ? "Session graph (all)" : "Session graph (current component)",
+		"",
+		`Source: ${graph.source}`,
+		`Store: ${shortPath(curatedStoreFile())}`,
+		`Manifest fallback: ${shortPath(manifestFile())}`,
+		`Overlay fallback: ${shortPath(overlayFile())}`,
+		`Active filters: ${filterSummary(filters)}`,
+		`Records: ${graph.records.length}`,
+		`Overlay records: ${graph.overlays.length}`,
+		`Sessions: ${graph.nodes.size}`,
+		`Roots: ${roots(graph).length}`,
+		`Leaves: ${leaves(graph).length}`,
+		`Fork points: ${forks(graph).length}`,
+		`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
+		`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
+		"",
+		"Wrote:",
+		shortPath(written.mdPath),
+		shortPath(written.mmdPath),
+		"",
+		"Recent edges:",
+	];
+	for (const [index, record] of graph.records.slice(-10).entries()) lines.push(...formatHop(record, graph.records.length - Math.min(10, graph.records.length) + index + 1, current, false));
+	return lines;
+}
+
+async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
+	const subcommand = argv[0] ?? "status";
+	const rest = argv.slice(1);
+	const flags = new Set(rest);
+	const graph = await buildGraph();
+	const current = process.env.PI_SESSION_FILE;
+	const filters = parseGraphFilters(rest);
+	if (subcommand === "status") return statusLines(graph, current, cwd).join("\n");
+	if (subcommand === "lineage") return lineageLines(graph, current, flags.has("--files")).join("\n");
+	if (subcommand === "leaves") return leavesLines(graph, current, flags.has("--all")).join("\n");
+	if (subcommand === "repos") return reposLines(graph).join("\n");
+	if (subcommand === "mermaid" || subcommand === "graph") {
+		const scoped = flags.has("--all") ? graph : graph;
+		const filtered = filterGraph(scoped, filters);
+		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
+	}
+	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("session-status", {
 		description: "Show current session graph status.",
 		handler: async (_args, ctx) => {
-			const graph = await buildGraph();
-			const current = currentSession(ctx);
-			const lineage = lineageFor(graph, current);
-			const leaf = current ? !graph.children.has(current) : false;
-			const lines = [
-				"Session graph status",
-				"",
-				`Current cwd: ${shortPath(ctx.cwd)}`,
-				`Current session: ${current ? shortPath(current) : "(ephemeral)"}`,
-				`Current id: ${current ? sessionId(current) : "(none)"}`,
-				`Tracked: ${current && graph.byDestination.has(current) ? "yes" : "no"}`,
-				`Generation/depth: ${lineage.length}`,
-				`Leaf: ${leaf ? "yes" : "no"}`,
-				`Source: ${graph.source}`,
-				`Records: ${graph.records.length}`,
-				`Overlay records: ${graph.overlays.length}`,
-				`Sessions: ${graph.nodes.size}`,
-				`Roots: ${roots(graph).length}`,
-				`Leaves: ${leaves(graph).length}`,
-				`Fork points: ${forks(graph).length}`,
-				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
-				`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
-			];
-			ctx.ui.notify(lines.join("\n"), "info");
+			ctx.ui.notify(statusLines(await buildGraph(), currentSession(ctx), ctx.cwd).join("\n"), "info");
 		},
 	});
 
 	pi.registerCommand("session-lineage", {
 		description: "Show current session ancestry chain. Use --files for paths.",
 		handler: async (args, ctx) => {
-			const flags = parseFlags(args);
-			const graph = await buildGraph();
-			const current = currentSession(ctx);
-			const lineage = lineageFor(graph, current);
-			const lines = ["Session lineage", "", `Current session: ${current ? shortPath(current) : "(ephemeral)"}`];
-			if (!current) lines.push("", "Current session is ephemeral.");
-			else if (!lineage.length) lines.push("", "Current session has no recorded ancestry.");
-			else {
-				lines.push("", "Current chain:");
-				for (const [index, record] of lineage.entries()) lines.push(...formatHop(record, index + 1, current, flags.has("--files")));
-			}
-			ctx.ui.notify(lines.join("\n"), "info");
+			ctx.ui.notify(lineageLines(await buildGraph(), currentSession(ctx), parseFlags(args).has("--files")).join("\n"), "info");
 		},
 	});
 
 	pi.registerCommand("session-leaves", {
 		description: "Show graph leaves for the current component. Use --all for all known leaves.",
 		handler: async (args, ctx) => {
-			const flags = parseFlags(args);
-			const full = await buildGraph();
-			const current = currentSession(ctx);
-			const graph = flags.has("--all") ? full : componentGraph(full, current);
-			const nodes = leaves(graph).sort((a, b) => a.label.localeCompare(b.label));
-			const lines = [flags.has("--all") ? "Session leaves (all)" : "Session leaves (current component)", ""];
-			for (const node of nodes) lines.push(`- ${node.label}${node.path === current ? " current" : ""} (${node.id})`);
-			if (!nodes.length) lines.push("(none)");
-			ctx.ui.notify(lines.join("\n"), "info");
+			ctx.ui.notify(leavesLines(await buildGraph(), currentSession(ctx), parseFlags(args).has("--all")).join("\n"), "info");
 		},
 	});
 
 	pi.registerCommand("session-repos", {
 		description: "Show repo identity records from the canonical store export.",
 		handler: async (_args, ctx) => {
-			const graph = await buildGraph();
-			const repos = graph.repoIdentities ?? [];
-			const lines = ["Repo identities", "", `Source: ${graph.source}`, `Count: ${repos.length}`, ""];
-			for (const repo of repos.slice(0, 30)) {
-				lines.push(`- ${repo.displayName ?? repo.stableName} (${repo.confidence ?? "unknown"})`, `  observations: ${repo.observations?.length ?? 0}; events: ${repo.events?.length ?? 0}`);
-				for (const event of (repo.events ?? []).slice(0, 3)) lines.push(`  - ${event.timestamp ?? "unknown"} ${event.eventType}: ${event.summary ?? `${event.fromPath ?? ""} -> ${event.toPath ?? ""}`.trim()}`);
-			}
-			if (repos.length > 30) lines.push(`... ${repos.length - 30} more`);
-			if (!repos.length) lines.push("No repo identity records found. Run agent-session-store build/export after adding repo-identities.jsonl.");
-			ctx.ui.notify(lines.join("\n"), "info");
+			ctx.ui.notify(reposLines(await buildGraph()).join("\n"), "info");
 		},
 	});
 
 	pi.registerCommand("session-graph", {
-		description: "Write timestamped session graph Markdown/Mermaid files and show a summary. Use --all for the full forest.",
+		description: "Session graph namespace: status, lineage, leaves, repos, or mermaid (default).",
 		handler: async (args, ctx) => {
-			const flags = parseFlags(args);
+			const parsed = parseArgs(args);
+			const subcommand = parsed[0]?.startsWith("-") ? "mermaid" : parsed[0] ?? "mermaid";
+			const rest = subcommand === "mermaid" && parsed[0]?.startsWith("-") ? parsed : parsed.slice(1);
+			const flags = new Set(rest);
 			const full = await buildGraph();
 			const current = currentSession(ctx);
-			const graph = flags.has("--all") ? full : componentGraph(full, current);
-			const written = await writeGraphFiles(ctx.cwd, graph, current);
-			const lines = [
-				flags.has("--all") ? "Session graph (all)" : "Session graph (current component)",
-				"",
-				`Source: ${graph.source}`,
-				`Store: ${shortPath(curatedStoreFile())}`,
-				`Manifest fallback: ${shortPath(manifestFile())}`,
-				`Overlay fallback: ${shortPath(overlayFile())}`,
-				`Records: ${graph.records.length}`,
-				`Overlay records: ${graph.overlays.length}`,
-				`Sessions: ${graph.nodes.size}`,
-				`Roots: ${roots(graph).length}`,
-				`Leaves: ${leaves(graph).length}`,
-				`Fork points: ${forks(graph).length}`,
-				`Logical threads: ${graph.logicalThreads?.length ?? 0}`,
-				`Repo identities: ${graph.repoIdentities?.length ?? 0}`,
-				"",
-				"Wrote:",
-				shortPath(written.mdPath),
-				shortPath(written.mmdPath),
-				"",
-				"Recent edges:",
-			];
-			for (const [index, record] of graph.records.slice(-10).entries()) lines.push(...formatHop(record, graph.records.length - Math.min(10, graph.records.length) + index + 1, current, false));
-			ctx.ui.notify(lines.join("\n"), "info");
+			const filters = parseGraphFilters(rest);
+			if (subcommand === "status") return ctx.ui.notify(statusLines(full, current, ctx.cwd).join("\n"), "info");
+			if (subcommand === "lineage") return ctx.ui.notify(lineageLines(full, current, flags.has("--files")).join("\n"), "info");
+			if (subcommand === "leaves") return ctx.ui.notify(leavesLines(full, current, flags.has("--all")).join("\n"), "info");
+			if (subcommand === "repos") return ctx.ui.notify(reposLines(full).join("\n"), "info");
+			if (subcommand !== "mermaid" && subcommand !== "graph") {
+				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
+			}
+			const scoped = flags.has("--all") ? full : componentGraph(full, current);
+			const graph = filterGraph(scoped, filters);
+			ctx.ui.notify((await graphWriteLines(ctx.cwd, graph, current, flags.has("--all"), filters)).join("\n"), "info");
 		},
 	});
 }
 
-export { buildGraph, leaves, lineageFor, listSessionFiles, mermaid, roots, sessionId };
+export { buildGraph, leaves, lineageFor, listSessionFiles, mermaid, roots, runCli, sessionId };
