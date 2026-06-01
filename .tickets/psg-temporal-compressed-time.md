@@ -1,6 +1,6 @@
 ---
 id: psg-temporal-compressed-time
-status: open
+status: closed
 deps: [psg-canonical-temporal-html]
 links:
   - ../agent-session-store/.tickets/ass-temporal-axis-data.md
@@ -25,3 +25,8 @@ Temporal session graphs should avoid wasting horizontal space on months where no
 ## Boundary note
 
 The compression algorithm belongs in the renderer, but it should operate over prepared temporal activity spans from `agent-session-store`, not parse raw sessions directly.
+
+
+## Closure
+
+Canonical temporal HTML now has a real/compressed axis toggle. Compressed mode collapses inactive gaps longer than seven days into one-day visual breaks, renders labeled gap markers, preserves real timestamps/durations in detail payloads, and documents the behavior in the sticky legend. The algorithm operates only over prepared `temporalActivitySpans` from `graph-export.json`.
