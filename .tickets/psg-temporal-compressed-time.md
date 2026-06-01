@@ -2,7 +2,8 @@
 id: psg-temporal-compressed-time
 status: open
 deps: [psg-canonical-temporal-html]
-links: []
+links:
+  - ../agent-session-store/.tickets/ass-temporal-axis-data.md
 created: 2026-06-01T14:00:00Z
 type: feature
 priority: 2
@@ -20,3 +21,7 @@ Temporal session graphs should avoid wasting horizontal space on months where no
 - Gap compression works for whole graph and focused/component views.
 - Hover/detail text still shows real timestamps and durations.
 - Legend explains compressed time and gap markers.
+
+## Boundary note
+
+The compression algorithm belongs in the renderer, but it should operate over prepared temporal activity spans from `agent-session-store`, not parse raw sessions directly.

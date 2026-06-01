@@ -2,7 +2,8 @@
 id: psg-agent-accrued-effort-lanes
 status: open
 deps: [psg-canonical-temporal-html]
-links: []
+links:
+  - ../agent-session-store/.tickets/ass-agent-effort-metrics.md
 created: 2026-06-01T14:00:00Z
 type: feature
 priority: 2
@@ -20,3 +21,7 @@ Temporal session views currently emphasize how long a repo/worktree lane has bee
 - Hover/detail shows per-repo and cross-repo totals for the selected agent/provider/lineage.
 - Works with Pi sessions first; degrades gracefully for providers with sparse metadata.
 - Legend explains the difference between wall-clock span and accrued activity.
+
+## Boundary note
+
+Effort/activity metrics should be computed/exported by `agent-session-store`. This ticket renders those metrics across repo lanes and explains them in the viewer.

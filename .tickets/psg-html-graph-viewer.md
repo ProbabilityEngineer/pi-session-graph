@@ -2,7 +2,8 @@
 id: psg-html-graph-viewer
 status: open
 deps: [psg-confidence-provider-filters]
-links: []
+links:
+  - ../agent-session-store/.tickets/ass-graph-export-contract.md
 created: 2026-05-31T16:45:00Z
 type: feature
 priority: 1
@@ -24,3 +25,7 @@ Mermaid is useful for small/component graphs, but full session/provider/repo gra
 - Can evolve toward generic memory/identity graph records described in `agent-memory-identity/docs/graph-viewer-requirements.md`.
 - Selecting a node/edge can show details/evidence/provenance when present.
 - Selected subgraphs can eventually be exported to JSON/Mermaid/Markdown.
+
+## Boundary note
+
+The viewer should consume the canonical graph export contract from `agent-session-store`; it should not duplicate provider import, repo identity inference, temporal burst derivation, or compaction/fork detection.

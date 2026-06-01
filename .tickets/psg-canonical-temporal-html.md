@@ -4,6 +4,8 @@ status: open
 deps: [psg-html-graph-viewer]
 links:
   - ../agent-session-store/.tickets/ass-cyp-project-alias.md
+  - ../agent-session-store/.tickets/ass-graph-export-contract.md
+  - ../agent-session-store/.tickets/ass-temporal-axis-data.md
 created: 2026-05-31T17:00:00Z
 type: feature
 priority: 2
@@ -20,3 +22,7 @@ The existing temporal HTML is based on older Pi relocation/reconstruction inputs
 - Can group rows by repo identity/project alias, cwd, provider, or individual session.
 - Shows confidence/provenance in hover/details.
 - CYP/Check Your Photos can appear as one project lane when aliases are curated.
+
+## Boundary note
+
+This ticket is rendering/viewer work. Canonical temporal lanes, work bursts, provider activity counts, and repo identity aliases should be exported by `agent-session-store`; this repo should render and filter those prepared records.
