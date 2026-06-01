@@ -332,7 +332,7 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 			displayLabel: classification?.metadata?.displayLabel,
 			edgeType: edge.edgeType,
 			provenance: edge.provenance,
-			overlay: edge.provenance !== "pi-relocate-manifest" && edge.provenance !== "pi-move-manifest" && edge.provenance !== "pi-move-repo-manifest" && edge.provenance !== "pi-repo-move-manifest",
+			overlay: edge.provenance !== "pi-session-move-manifest" && edge.provenance !== "pi-relocate-manifest" && edge.provenance !== "pi-move-manifest" && edge.provenance !== "pi-move-repo-manifest" && edge.provenance !== "pi-repo-move-manifest",
 			operationType,
 			tool,
 			mode,

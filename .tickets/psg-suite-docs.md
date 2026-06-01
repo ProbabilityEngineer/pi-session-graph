@@ -14,7 +14,7 @@ Update pi-session-graph docs to explain its place in the pi-session suite.
 
 ## Acceptance Criteria
 
-- README references `agent-session-store`/`pi-session-store`, `pi-session-relocate`, and `pi-repo-move`.
+- README references `agent-session-store`/`pi-session-store`, `pi-session-move`, and `pi-repo-move`.
 - Graph remains documented as read-only viewer over prepared store exports.
 - Install examples use the aligned naming once packages exist.
 

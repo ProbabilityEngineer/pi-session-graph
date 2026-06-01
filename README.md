@@ -42,7 +42,7 @@ pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output
 
 - `agent-session-store`: provider-neutral canonical store and graph export builder.
 - `pi-session-store`: planned Pi-facing wrapper around store workflows.
-- `pi-session-relocate`: planned/session-facing relocation and restart UX.
+- `pi-session-move`: session-facing move and restart UX.
 - `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
 - `pi-session-graph`: extension + CLI/static viewer over prepared exports.
 
