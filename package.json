@@ -30,6 +30,6 @@
     ]
   },
   "bin": {
-    "pi-session-graph": "./bin/pi-session-graph.ts"
+    "pigraph": "./bin/pigraph.ts"
   }
 }

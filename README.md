@@ -28,10 +28,10 @@ Compatibility aliases remain available:
 A CLI entrypoint is also exposed for non-chat graph/status use:
 
 ```bash
-pi-session-graph status
-pi-session-graph mermaid --all
-pi-session-graph html
-pi-session-graph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
+pigraph status
+pigraph mermaid --all
+pigraph html
+pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
 ```
 
 
@@ -97,7 +97,7 @@ Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/
 
 ## Artifacts
 
-`/session-graph mermaid` and `pi-session-graph mermaid` write timestamped Markdown and Mermaid files under the current repo:
+`/session-graph mermaid` and `pigraph mermaid` write timestamped Markdown and Mermaid files under the current repo:
 
 ```text
 session-graph/session_graph_<timestamp>.md
@@ -133,7 +133,7 @@ Use `agent-session-store` for canonical store rebuilds, repo identity curation, 
 ## HTML viewer
 
 ```bash
-pi-session-graph html
+pigraph html
 ```
 
 Or inside Pi:
@@ -147,8 +147,8 @@ The viewer reads prepared graph data, supports search and confidence/provider/ed
 ## Temporal HTML viewer
 
 ```bash
-pi-session-graph temporal
-pi-session-graph temporal --input ~/.pi/agent/session-store/graph-export.json --output /tmp/temporal.html
+pigraph temporal
+pigraph temporal --input ~/.pi/agent/session-store/graph-export.json --output /tmp/temporal.html
 ```
 
 Or inside Pi:

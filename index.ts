@@ -760,7 +760,7 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 		const filtered = filterGraph(scoped, filters);
 		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
 	}
-	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
+	return "Usage: pigraph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
 }
 
 export default function (pi: ExtensionAPI) {
