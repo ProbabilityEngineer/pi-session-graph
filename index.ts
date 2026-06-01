@@ -1,7 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { promisify } from "node:util";
+import { basename, join, resolve } from "node:path";
+
+const execFileAsync = promisify(execFile);
 
 const MANIFEST = "relocations.jsonl";
 const OVERLAYS = "session-graph/lineage-overlays.jsonl";
@@ -116,6 +120,30 @@ function curatedStoreFile() {
 
 function graphExportFile() {
 	return join(agentDir(), GRAPH_EXPORT);
+}
+
+function desktopOutputRoot() {
+	return join(process.env.HOME ?? ".", "Desktop");
+}
+
+function agentSessionStoreRoot() {
+	return resolve(process.env.AGENT_SESSION_STORE_REPO ?? join(process.env.HOME ?? ".", "git", "agents", "agent-session-store"));
+}
+
+async function refreshStoreExport(): Promise<string[]> {
+	const cwd = agentSessionStoreRoot();
+	const run = async (script: "build-store" | "export-graph") => {
+		const { stdout, stderr } = await execFileAsync("npm", ["run", script], { cwd, env: process.env });
+		return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+	};
+	const build = await run("build-store");
+	const exportGraph = await run("export-graph");
+	return [
+		"Refreshed graph export",
+		`Core repo: ${shortPath(cwd)}`,
+		...(build ? [build] : []),
+		...(exportGraph ? [exportGraph] : []),
+	];
 }
 
 function shortHash(value: string) {
@@ -822,7 +850,7 @@ function reposLines(graph: Graph) {
 async function htmlWriteLines(cwd: string, graph: Graph) {
 	const htmlPath = await writeHtmlViewer(cwd, graph);
 	return [
-		"Session graph HTML viewer",
+		"Session lineage HTML viewer",
 		"",
 		`Source: ${graph.source}`,
 		`Records: ${graph.records.length}`,
@@ -836,7 +864,7 @@ async function htmlWriteLines(cwd: string, graph: Graph) {
 async function graphWriteLines(cwd: string, graph: Graph, current: string | undefined, all: boolean, filters: GraphFilters) {
 	const written = await writeGraphFiles(cwd, graph, current, filters);
 	const lines = [
-		all ? "Session graph (all)" : "Session graph (current component)",
+		all ? "Session lineage Mermaid (all)" : "Session lineage Mermaid (current component)",
 		"",
 		`Source: ${graph.source}`,
 		`Graph export: ${shortPath(graphExportFile())}`,
@@ -869,21 +897,23 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	const flags = new Set(rest);
 	const inputPath = optionValue(rest, "--input");
 	const outputPath = optionValue(rest, "--output");
+	const refreshLines = flags.has("--refresh") ? await refreshStoreExport() : [];
 	const graph = await buildGraph(inputPath);
 	const current = process.env.PI_SESSION_FILE;
 	const filters = parseGraphFilters(rest);
+	const outputRoot = desktopOutputRoot();
+	const withRefresh = (lines: string[]) => [...refreshLines, ...(refreshLines.length ? [""] : []), ...lines].join("\n");
 	if (subcommand === "status") return statusLines(graph, current, cwd).join("\n");
-	if (subcommand === "lineage") return lineageLines(graph, current, flags.has("--files")).join("\n");
 	if (subcommand === "leaves") return leavesLines(graph, current, flags.has("--all")).join("\n");
 	if (subcommand === "repos") return reposLines(graph).join("\n");
-	if (subcommand === "html") return htmlWriteLines(cwd, filterGraph(graph, filters)).then((lines) => lines.join("\n"));
-	if (subcommand === "temporal") return temporalWriteLines(cwd, graph, outputPath).then((lines) => lines.join("\n"));
-	if (subcommand === "mermaid" || subcommand === "graph") {
+	if (subcommand === "lineage") return htmlWriteLines(outputRoot, filterGraph(graph, filters)).then(withRefresh);
+	if (subcommand === "timeline") return temporalWriteLines(outputRoot, graph, outputPath).then(withRefresh);
+	if (subcommand === "lineage-mermaid") {
 		const scoped = flags.has("--all") ? graph : graph;
 		const filtered = filterGraph(scoped, filters);
-		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
+		return graphWriteLines(outputRoot, filtered, current, flags.has("--all"), filters).then(withRefresh);
 	}
-	return "Usage: pigraph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b] [--repo text]";
+	return "Usage: pigraph [status|leaves|repos|lineage|lineage-mermaid|timeline] [--refresh] [--all] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b] [--repo text]";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -916,27 +946,34 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("session-graph", {
-		description: "Session graph namespace: status, lineage, leaves, repos, or mermaid (default).",
+		description: "Session graph namespace: status, leaves, repos, lineage, lineage-mermaid, or timeline.",
 		handler: async (args, ctx) => {
 			const parsed = parseArgs(args);
-			const subcommand = parsed[0]?.startsWith("-") ? "mermaid" : parsed[0] ?? "mermaid";
-			const rest = subcommand === "mermaid" && parsed[0]?.startsWith("-") ? parsed : parsed.slice(1);
+			const subcommand = parsed[0]?.startsWith("-") ? "lineage" : parsed[0] ?? "lineage";
+			const rest = subcommand === "lineage" && parsed[0]?.startsWith("-") ? parsed : parsed.slice(1);
 			const flags = new Set(rest);
+			let refreshLines: string[] = [];
+			if (flags.has("--refresh")) {
+				ctx.ui.setStatus("session-graph", "refreshing store export");
+				refreshLines = await refreshStoreExport();
+				ctx.ui.setStatus("session-graph", "refresh complete");
+			}
 			const full = await buildGraph();
 			const current = currentSession(ctx);
 			const filters = parseGraphFilters(rest);
+			const outputRoot = desktopOutputRoot();
+			const notify = (lines: string[]) => ctx.ui.notify([...refreshLines, ...(refreshLines.length ? [""] : []), ...lines].join("\n"), "info");
 			if (subcommand === "status") return ctx.ui.notify(statusLines(full, current, ctx.cwd).join("\n"), "info");
-			if (subcommand === "lineage") return ctx.ui.notify(lineageLines(full, current, flags.has("--files")).join("\n"), "info");
 			if (subcommand === "leaves") return ctx.ui.notify(leavesLines(full, current, flags.has("--all")).join("\n"), "info");
 			if (subcommand === "repos") return ctx.ui.notify(reposLines(full).join("\n"), "info");
-			if (subcommand === "html") return ctx.ui.notify((await htmlWriteLines(ctx.cwd, filterGraph(full, filters))).join("\n"), "info");
-			if (subcommand === "temporal") return ctx.ui.notify((await temporalWriteLines(ctx.cwd, full, optionValue(rest, "--output"))).join("\n"), "info");
-			if (subcommand !== "mermaid" && subcommand !== "graph") {
-				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
+			if (subcommand === "lineage") return notify(await htmlWriteLines(outputRoot, filterGraph(full, filters)));
+			if (subcommand === "timeline") return notify(await temporalWriteLines(outputRoot, full, optionValue(rest, "--output")));
+			if (subcommand !== "lineage-mermaid") {
+				return ctx.ui.notify("Usage: /session-graph [status|leaves|repos|lineage|lineage-mermaid|timeline] [--refresh] [--all] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b]", "warning");
 			}
 			const scoped = flags.has("--all") ? full : componentGraph(full, current);
 			const graph = filterGraph(scoped, filters);
-			ctx.ui.notify((await graphWriteLines(ctx.cwd, graph, current, flags.has("--all"), filters)).join("\n"), "info");
+			return notify(await graphWriteLines(outputRoot, graph, current, flags.has("--all"), filters));
 		},
 	});
 }

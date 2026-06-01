@@ -8,12 +8,12 @@ Lightweight Pi extension for viewing prepared session lineage, logical thread, c
 
 ```text
 /session-graph status
-/session-graph lineage [--files]
+/session-graph lineage [--refresh]
+/session-graph lineage-mermaid [--refresh] [--all] [--min-confidence <level>] [--provider pi,codex] [--edge-type relocation]
+/session-graph timeline [--refresh] [--output path]
+/session-graph status
 /session-graph leaves [--all]
 /session-graph repos
-/session-graph mermaid [--all] [--min-confidence <level>] [--provider pi,codex] [--edge-type relocation]
-/session-graph html
-/session-graph temporal [--output path]
 ```
 
 Compatibility aliases remain available:
@@ -29,10 +29,9 @@ A CLI entrypoint is also exposed for non-chat graph/status use:
 
 ```bash
 pigraph status
-pigraph mermaid --all
-pigraph mermaid --operation-type repo_move --tool pi-repo-move
-pigraph html
-pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
+pigraph lineage --refresh
+pigraph lineage-mermaid --refresh --operation-type repo_move --tool pi-repo-move
+pigraph timeline --refresh [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
 ```
 
 
@@ -107,11 +106,21 @@ Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/
 
 ## Artifacts
 
-`/session-graph mermaid` and `pigraph mermaid` write timestamped Markdown and Mermaid files under the current repo:
+`/session-graph lineage`, `/session-graph lineage-mermaid`, and `/session-graph timeline` write timestamped files under the user's Desktop:
 
 ```text
-session-graph/session_graph_<timestamp>.md
-session-graph/graph_<timestamp>.mmd
+~/Desktop/session-graph/session_graph_viewer_<timestamp>.html
+~/Desktop/session-graph/session_graph_<timestamp>.md
+~/Desktop/session-graph/graph_<timestamp>.mmd
+~/Desktop/session-graph/temporal_graph_<timestamp>.html
+```
+
+Use `--refresh` to run `agent-session-store` rebuild/export before rendering:
+
+```text
+/session-graph lineage --refresh
+/session-graph lineage-mermaid --refresh
+/session-graph timeline --refresh
 ```
 
 ## Install
@@ -140,31 +149,51 @@ pi -e ./index.ts
 
 Use `agent-session-store` for canonical store rebuilds, repo identity curation, bucket reconciliation, graph exports, and reports.
 
-## HTML viewer
+## Lineage viewer
 
 ```bash
-pigraph html
+pigraph lineage
+pigraph lineage --refresh
 ```
 
 Or inside Pi:
 
 ```text
-/session-graph html
+/session-graph lineage
+/session-graph lineage --refresh
 ```
 
-The viewer reads prepared graph data, supports search and confidence/provider/edge-type filters, shows compaction counts in node details, and writes `session-graph/session_graph_viewer_<timestamp>.html`.
+The lineage viewer reads prepared graph data, supports search and confidence/provider/edge-type/operation/tool filters, shows compaction counts in node details, and writes `~/Desktop/session-graph/session_graph_viewer_<timestamp>.html`.
 
-## Temporal HTML viewer
+## Lineage Mermaid export
 
 ```bash
-pigraph temporal
-pigraph temporal --input ~/.pi/agent/session-store/graph-export.json --output /tmp/temporal.html
+pigraph lineage-mermaid
+pigraph lineage-mermaid --refresh --operation-type repo_move --tool pi-repo-move
 ```
 
 Or inside Pi:
 
 ```text
-/session-graph temporal
+/session-graph lineage-mermaid
+/session-graph lineage-mermaid --refresh
 ```
 
-The temporal viewer renders prepared `graph-export.json` records: `temporalActivitySpans`, `workBursts`, `activityMetrics`, and `compactionEvents`. It can group by project/cwd lane, provider, or session; the sticky legend explains wall-clock spans vs accrued activity metrics and compaction/checkpoint badges.
+The Mermaid export writes `~/Desktop/session-graph/session_graph_<timestamp>.md` and `~/Desktop/session-graph/graph_<timestamp>.mmd`.
+
+## Timeline viewer
+
+```bash
+pigraph timeline
+pigraph timeline --refresh
+pigraph timeline --input ~/.pi/agent/session-store/graph-export.json --output ~/Desktop/session-graph/timeline.html
+```
+
+Or inside Pi:
+
+```text
+/session-graph timeline
+/session-graph timeline --refresh
+```
+
+The timeline viewer renders prepared `graph-export.json` records: `temporalActivitySpans`, `workBursts`, `activityMetrics`, and `compactionEvents`. It can group by project/cwd lane, provider, or session; the sticky legend explains wall-clock spans vs accrued activity metrics and compaction/checkpoint badges. By default it writes `~/Desktop/session-graph/temporal_graph_<timestamp>.html`.
