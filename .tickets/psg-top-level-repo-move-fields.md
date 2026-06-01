@@ -5,9 +5,9 @@ type: feature
 priority: 2
 created: 2026-06-01T00:00:00Z
 ---
-# Render top-level pi-move repo move fields
+# Render top-level pi-repo-move repo move fields
 
-`agent-session-store` will expose repo move events derived from top-level `pi-move` manifest fields.
+`agent-session-store` exposes repo move events derived from top-level `pi-repo-move` manifest fields. Historical `pi-move` / `pi-move-repo` tool values remain supported as compatibility data.
 
 ## Acceptance Criteria
 

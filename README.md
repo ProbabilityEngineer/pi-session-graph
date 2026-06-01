@@ -30,6 +30,7 @@ A CLI entrypoint is also exposed for non-chat graph/status use:
 ```bash
 pigraph status
 pigraph mermaid --all
+pigraph mermaid --operation-type repo_move --tool pi-repo-move
 pigraph html
 pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
 ```
@@ -42,7 +43,7 @@ pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output
 - `agent-session-store`: provider-neutral canonical store and graph export builder.
 - `pi-session-store`: planned Pi-facing wrapper around store workflows.
 - `pi-session-relocate`: planned/session-facing relocation and restart UX.
-- `pi-session-repo-move`: planned filesystem repo move UX.
+- `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
 - `pi-session-graph`: extension + CLI/static viewer over prepared exports.
 
 The preferred future slash-command style is namespaced to reduce command clutter:
