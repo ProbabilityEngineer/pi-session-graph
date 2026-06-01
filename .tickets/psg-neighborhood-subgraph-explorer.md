@@ -1,6 +1,6 @@
 ---
 id: psg-neighborhood-subgraph-explorer
-status: open
+status: closed
 deps: [psg-html-graph-viewer]
 links:
   - ../../research/agent-memory-identity/docs/graph-viewer-requirements.md
@@ -19,3 +19,8 @@ Support focused N-hop graph exploration around a selected node.
 - Neighborhood view preserves active filters.
 - Supports source/session/claim/decision/commitment/episode-style nodes generically.
 - Can export selected subgraph as JSON and Mermaid.
+
+
+## Closure
+
+Added HTML viewer 1-hop and 2-hop focus controls around selected nodes, preserving active filters, plus reset and export of the selected subgraph as JSON or Mermaid.
