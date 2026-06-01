@@ -16,14 +16,23 @@ assignee: ProbabilityEngineer
 
 ### Pi extension surface
 
-Keep lightweight in-Pi commands:
+Move toward one namespaced command with subcommands, while keeping legacy aliases for compatibility:
+
+```text
+/session-graph status
+/session-graph lineage [--files]
+/session-graph leaves [--all]
+/session-graph repos
+/session-graph mermaid [--all|--component]
+```
+
+Compatibility aliases may remain temporarily:
 
 ```text
 /session-status
-/session-lineage [--files]
-/session-leaves [--all]
+/session-lineage
+/session-leaves
 /session-repos
-/session-graph [--all|--component]
 ```
 
 Purpose:
@@ -64,7 +73,8 @@ Purpose:
 
 - README documents extension vs CLI/static responsibilities.
 - Package exposes a `bin` entry for CLI use.
-- Existing Pi extension commands remain available.
+- New docs prefer one top-level `/session-graph ...` namespace.
+- Existing Pi extension commands remain available as compatibility aliases during migration.
 - CLI can read the same canonical graph export paths as the extension.
 - Large HTML/temporal outputs are generated through CLI/static commands rather than slash-command chat output.
 

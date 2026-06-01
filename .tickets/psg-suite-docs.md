@@ -17,3 +17,16 @@ Update pi-session-graph docs to explain its place in the pi-session suite.
 - README references `agent-session-store`/`pi-session-store`, `pi-session-relocate`, and `pi-session-repo-move`.
 - Graph remains documented as read-only viewer over prepared store exports.
 - Install examples use the aligned naming once packages exist.
+
+## Slash command policy
+
+Prefer a compact namespaced command surface:
+
+```text
+/session-graph status
+/session-graph lineage
+/session-graph leaves
+/session-graph repos
+```
+
+Existing top-level commands may remain as compatibility aliases, but docs should steer users toward the namespace to reduce slash-command clutter.
