@@ -24,3 +24,8 @@ After defining the extension/CLI split, add CLI commands for large graph outputs
 - Commands accept input/output path flags.
 - Commands do not depend on Pi interactive chat context.
 - Existing extension behavior is preserved.
+
+
+## Progress
+
+Implemented the package `bin` entrypoint and initial `pi-session-graph html`/`pi-session-graph mermaid`/status-style commands. `pi-session-graph temporal` is intentionally blocked until `agent-session-store` exports canonical temporal activity spans and effort metrics.

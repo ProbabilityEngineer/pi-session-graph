@@ -451,6 +451,68 @@ function timestamp() {
 	return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function graphExportData(graph: Graph) {
+	return {
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider })),
+		edges: graph.records.flatMap((record, index) => {
+			const from = graph.nodes.get(record.sourceSession);
+			const to = graph.nodes.get(record.destinationSession);
+			if (!from || !to) return [];
+			return [{
+				id: `edge_${index + 1}`,
+				from: from.id,
+				to: to.id,
+				sourceSession: record.sourceSession,
+				destinationSession: record.destinationSession,
+				type: recordType(record),
+				confidence: record.confidence ?? "unknown",
+				provider: from.provider || to.provider || "unknown",
+				timestamp: record.ts,
+				label: [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / "),
+				inferred: record.inferred,
+				overlay: record.overlay,
+			}];
+		}),
+	};
+}
+
+async function writeHtmlViewer(cwd: string, graph: Graph) {
+	const dir = join(cwd, "session-graph");
+	await mkdir(dir, { recursive: true });
+	const stamp = timestamp();
+	const data = JSON.stringify(graphExportData(graph)).replace(/</g, "\\u003c");
+	const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Pi Session Graph Viewer</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8dee9;background:#111827} header{position:sticky;top:0;background:#0f172a;padding:12px 16px;border-bottom:1px solid #334155;z-index:2} input,select{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:6px;padding:4px 6px;margin-right:8px} main{display:grid;grid-template-columns:1fr 360px;gap:0;height:calc(100vh - 58px)} #graph{overflow:auto;padding:16px}.lane{border:1px solid #334155;border-radius:10px;margin:0 0 14px;padding:10px;background:#172033}.node{display:inline-block;border:1px solid #64748b;border-radius:8px;padding:6px 8px;margin:4px;background:#1e293b;cursor:pointer}.node:hover,.edge:hover{border-color:#93c5fd}.edge{border-left:3px solid #60a5fa;padding:6px 8px;margin:5px;background:#0f172a;cursor:pointer}.edge.low{border-left-color:#f97316}.edge.authoritative{border-left-color:#22c55e} aside{border-left:1px solid #334155;padding:16px;background:#0f172a;overflow:auto} .muted{color:#94a3b8}.hidden{display:none}</style>
+</head>
+<body>
+<header>
+<strong>Pi Session Graph</strong>
+<input id="search" placeholder="search title/cwd/session/provider" size="34" />
+<select id="confidence"><option value="">all confidence</option><option>authoritative</option><option>high</option><option>medium</option><option>low</option><option>unknown</option></select>
+<select id="provider"><option value="">all providers</option></select>
+<select id="edgeType"><option value="">all edge types</option></select>
+<span class="muted" id="counts"></span>
+</header>
+<main><section id="graph"></section><aside><h2>Details</h2><pre id="details">Select a node or edge.</pre></aside></main>
+<script>const DATA=${data};
+const $=id=>document.getElementById(id); const graph=$('graph'), details=$('details');
+function uniq(xs){return [...new Set(xs.filter(Boolean))].sort()}
+for(const p of uniq(DATA.nodes.map(n=>n.provider).concat(DATA.edges.map(e=>e.provider)))) $('provider').append(new Option(p,p));
+for(const t of uniq(DATA.edges.map(e=>e.type))) $('edgeType').append(new Option(t,t));
+function matchText(obj,q){return !q || JSON.stringify(obj).toLowerCase().includes(q)}
+function render(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, t=$('edgeType').value; graph.innerHTML=''; const visibleEdges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&matchText(e,q)); const ids=new Set(visibleEdges.flatMap(e=>[e.from,e.to])); const visibleNodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!q||matchText(n,q)||ids.has(n.id))); for(const lane of uniq(visibleNodes.map(n=>n.label))){const box=document.createElement('div');box.className='lane';box.innerHTML='<h3>'+lane+'</h3>'; for(const n of visibleNodes.filter(n=>n.label===lane)){const el=document.createElement('button');el.className='node';el.textContent=n.label+' · '+n.id;el.onclick=()=>details.textContent=JSON.stringify(n,null,2);box.append(el)} graph.append(box)} const edgeBox=document.createElement('div');edgeBox.className='lane';edgeBox.innerHTML='<h3>Edges</h3>'; for(const e of visibleEdges.filter(e=>matchText(e,q)||visibleNodes.some(n=>n.id===e.from||n.id===e.to))){const el=document.createElement('div');el.className='edge '+e.confidence;el.textContent=e.label+' · '+e.from+' → '+e.to;el.onclick=()=>details.textContent=JSON.stringify(e,null,2);edgeBox.append(el)} graph.append(edgeBox); $('counts').textContent=visibleNodes.length+' nodes, '+visibleEdges.length+' edges'}
+for(const id of ['search','confidence','provider','edgeType']) $(id).addEventListener('input',render); render();</script>
+</body></html>`;
+	const htmlPath = join(dir, `session_graph_viewer_${stamp}.html`);
+	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });
+	return htmlPath;
+}
+
 async function writeGraphFiles(cwd: string, graph: Graph, current?: string, filters: GraphFilters = {}) {
 	const dir = join(cwd, "session-graph");
 	await mkdir(dir, { recursive: true });
@@ -557,6 +619,20 @@ function reposLines(graph: Graph) {
 	return lines;
 }
 
+async function htmlWriteLines(cwd: string, graph: Graph) {
+	const htmlPath = await writeHtmlViewer(cwd, graph);
+	return [
+		"Session graph HTML viewer",
+		"",
+		`Source: ${graph.source}`,
+		`Records: ${graph.records.length}`,
+		`Sessions: ${graph.nodes.size}`,
+		"",
+		"Wrote:",
+		shortPath(htmlPath),
+	];
+}
+
 async function graphWriteLines(cwd: string, graph: Graph, current: string | undefined, all: boolean, filters: GraphFilters) {
 	const written = await writeGraphFiles(cwd, graph, current, filters);
 	const lines = [
@@ -597,12 +673,14 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	if (subcommand === "lineage") return lineageLines(graph, current, flags.has("--files")).join("\n");
 	if (subcommand === "leaves") return leavesLines(graph, current, flags.has("--all")).join("\n");
 	if (subcommand === "repos") return reposLines(graph).join("\n");
+	if (subcommand === "html") return htmlWriteLines(cwd, filterGraph(graph, filters)).then((lines) => lines.join("\n"));
 	if (subcommand === "mermaid" || subcommand === "graph") {
 		const scoped = flags.has("--all") ? graph : graph;
 		const filtered = filterGraph(scoped, filters);
 		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
 	}
-	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
+	if (subcommand === "temporal") return "Temporal rendering needs canonical temporal activity exports from agent-session-store before this CLI can implement it.";
+	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -648,8 +726,10 @@ export default function (pi: ExtensionAPI) {
 			if (subcommand === "lineage") return ctx.ui.notify(lineageLines(full, current, flags.has("--files")).join("\n"), "info");
 			if (subcommand === "leaves") return ctx.ui.notify(leavesLines(full, current, flags.has("--all")).join("\n"), "info");
 			if (subcommand === "repos") return ctx.ui.notify(reposLines(full).join("\n"), "info");
+			if (subcommand === "html") return ctx.ui.notify((await htmlWriteLines(ctx.cwd, filterGraph(full, filters))).join("\n"), "info");
+			if (subcommand === "temporal") return ctx.ui.notify("Temporal rendering needs canonical temporal activity exports from agent-session-store before this command can be implemented.", "warning");
 			if (subcommand !== "mermaid" && subcommand !== "graph") {
-				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
+				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
 			}
 			const scoped = flags.has("--all") ? full : componentGraph(full, current);
 			const graph = filterGraph(scoped, filters);

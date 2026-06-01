@@ -28,6 +28,7 @@ A CLI entrypoint is also exposed for non-chat graph/status use:
 ```bash
 pi-session-graph status
 pi-session-graph mermaid --all
+pi-session-graph html
 ```
 
 ## Data sources
@@ -91,3 +92,17 @@ pi -e ./index.ts
 - Does not perform backup extraction/reconstruction.
 
 Use `agent-session-store` for canonical store rebuilds, repo identity curation, bucket reconciliation, graph exports, and reports.
+
+## HTML viewer
+
+```bash
+pi-session-graph html
+```
+
+Or inside Pi:
+
+```text
+/session-graph html
+```
+
+The viewer reads prepared graph data, supports search and confidence/provider/edge-type filters, and writes `session-graph/session_graph_viewer_<timestamp>.html`. Temporal rendering is intentionally deferred until `agent-session-store` exports canonical temporal activity data.
