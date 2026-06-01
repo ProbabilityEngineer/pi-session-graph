@@ -46,13 +46,13 @@ pigraph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output
 - `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
 - `pi-session-graph`: extension + CLI/static viewer over prepared exports.
 
-The preferred future slash-command style is namespaced to reduce command clutter:
+The preferred slash-command style is namespaced/focused to reduce command clutter:
 
 ```text
 /session-store ...
 /session-graph ...
-/session-relocate ...
-/session-repo ...
+/move ...
+/repo-move ...
 ```
 
 Existing top-level graph commands remain compatibility aliases for now.
@@ -78,12 +78,21 @@ npm run build-store
 npm run export-graph
 ```
 
-Fallback inputs:
+`agent-session-store` merges legacy and namespaced session-move manifests before graph export:
+
+```text
+~/.pi/agent/relocations.jsonl
+~/.pi/agent/session-move/manifests/relocations.jsonl
+```
+
+Fallback inputs, used only when the prepared graph export is unavailable:
 
 ```text
 ~/.pi/agent/relocations.jsonl
 ~/.pi/agent/session-graph/lineage-overlays.jsonl
 ```
+
+`pi-session-graph` should normally read the prepared store export rather than parsing raw session-move manifests directly.
 
 ## What it displays
 
@@ -124,7 +133,7 @@ pi -e ./index.ts
 `pi-session-graph` owns read-only rendering/navigation: Pi current-session commands, CLI/static HTML generation, Mermaid graph output, temporal viewers, filters, search, grouping, legends, and detail panels over prepared exports.
 
 - Does not mutate session JSONLs.
-- Does not rewrite `~/.pi/agent/relocations.jsonl`.
+- Does not rewrite legacy `~/.pi/agent/relocations.jsonl` or namespaced `~/.pi/agent/session-move/manifests/relocations.jsonl`.
 - Does not infer repo identity from raw content.
 - Does not compute temporal/activity metrics from raw sessions.
 - Does not perform backup extraction/reconstruction.
