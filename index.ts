@@ -27,6 +27,12 @@ type RelocationRecord = {
 	edgeType?: string;
 	overlay?: boolean;
 	evidence?: unknown;
+	operationType?: string;
+	tool?: string;
+	mode?: string;
+	batchId?: string;
+	sourceRepo?: string;
+	targetRepo?: string;
 	metadata?: Record<string, unknown>;
 };
 
@@ -42,14 +48,14 @@ type GenericEdge = { id?: string; type?: string; kind?: string; from?: string; t
 type StoreExport = {
 	nodes?: GenericNode[];
 	sessions?: { id: string; canonicalKey: string; provider?: string; providerSessionId?: string; startTimestamp?: string; endTimestamp?: string; lineCount?: number; byteCount?: number; metadata?: { cwd?: string; displayName?: string; provider?: string } }[];
-	edges?: ({ id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } } | GenericEdge)[];
+	edges?: ({ id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; operationType?: string; tool?: string; mode?: string; batchId?: string; sourceRepo?: string; targetRepo?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number; operationType?: string; tool?: string; mode?: string; batchId?: string; sourceRepo?: string; targetRepo?: string } } | GenericEdge)[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
 	logicalThreads?: { id: string; label?: string; metadata?: Record<string, unknown> }[];
 	threadMembers?: { threadId: string; sessionId: string; role?: string; ordinal?: number; metadata?: Record<string, unknown> }[];
 	repoIdentities?: { id: string; stableName: string; displayName?: string; description?: string; confidence?: string }[];
 	repoObservations?: { repoIdentityId: string; path?: string; bucket?: string; remoteUrl?: string; validFrom?: string; validTo?: string; confidence?: string }[];
-	repoEvents?: { eventType: string; repoIdentityId?: string; relatedRepoIdentityId?: string; fromPath?: string; toPath?: string; timestamp?: string; confidence?: string; manualReviewRequired?: boolean; summary?: string }[];
+	repoEvents?: { eventType: string; repoIdentityId?: string; relatedRepoIdentityId?: string; fromPath?: string; toPath?: string; timestamp?: string; confidence?: string; manualReviewRequired?: boolean; summary?: string; operationType?: string; tool?: string; sourceRepo?: string; targetRepo?: string; metadata?: Record<string, unknown> }[];
 	compactionEvents?: { id: string; sessionId: string; timestamp?: string; confidence?: string; eventCount?: number; summaryEventCount?: number; compactedLineCount?: number; compactedCharCount?: number; firstCompactionAt?: string; lastCompactionAt?: string; summary?: string; metadata?: { path?: string; eventCount?: number; summaryEventCount?: number } }[];
 	temporalActivitySpans?: { id: string; sessionId?: string; provider?: string; cwd?: string; label?: string; start?: string; end?: string; lineCount?: number; byteCount?: number; activityScore?: number; confidence?: string; provenance?: string }[];
 	workBursts?: { id: string; repoIdentityId?: string; sessionIds?: string[]; providers?: string[]; start?: string; end?: string; sessionCount?: number; confidence?: string; provenance?: string }[];
@@ -118,6 +124,14 @@ function shortHash(value: string) {
 
 function sessionId(path: string) {
 	return `ses_${shortHash(path)}`;
+}
+
+function fieldString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function contractField(edge: { operationType?: string; tool?: string; mode?: string; batchId?: string; sourceRepo?: string; targetRepo?: string; metadata?: Record<string, unknown> }, key: "operationType" | "tool" | "mode" | "batchId" | "sourceRepo" | "targetRepo") {
+	return fieldString(edge[key]) ?? fieldString(edge.metadata?.[key]);
 }
 
 function shortPath(path: string) {
@@ -300,6 +314,12 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		const target = sessionsById.get(edge.targetSessionId);
 		if (!source || !target) continue;
 		const classification = classificationByEdge.get(edge.id);
+		const operationType = contractField(edge, "operationType");
+		const tool = contractField(edge, "tool");
+		const mode = contractField(edge, "mode");
+		const batchId = contractField(edge, "batchId");
+		const sourceRepo = contractField(edge, "sourceRepo");
+		const targetRepo = contractField(edge, "targetRepo");
 		records.push({
 			ts: edge.timestamp ?? "(store)",
 			fromCwd: edge.metadata?.fromCwd ?? labelByTarget.get(source.id) ?? source.metadata?.cwd ?? "(store/unknown)",
@@ -312,8 +332,14 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 			displayLabel: classification?.metadata?.displayLabel,
 			edgeType: edge.edgeType,
 			provenance: edge.provenance,
-			overlay: edge.provenance !== "pi-relocate-manifest",
-			metadata: edge.metadata,
+			overlay: edge.provenance !== "pi-relocate-manifest" && edge.provenance !== "pi-move-manifest" && edge.provenance !== "pi-move-repo-manifest" && edge.provenance !== "pi-repo-move-manifest",
+			operationType,
+			tool,
+			mode,
+			batchId,
+			sourceRepo,
+			targetRepo,
+			metadata: { ...(edge.metadata ?? {}), operationType, tool, mode, batchId, sourceRepo, targetRepo },
 		});
 	}
 	const graph = graphFromRecords(records, overlays, new Map(), "store", logicalThreads, repoIdentities);
@@ -428,7 +454,7 @@ function componentGraph(graph: Graph, current?: string) {
 	return rebuildGraph(graph, records, nodes);
 }
 
-type GraphFilters = { minConfidence?: string; providers?: Set<string>; edgeTypes?: Set<string> };
+type GraphFilters = { minConfidence?: string; providers?: Set<string>; edgeTypes?: Set<string>; operationTypes?: Set<string>; tools?: Set<string>; repos?: Set<string> };
 
 const confidenceRank = new Map<string, number>([["low", 1], ["medium", 2], ["filename-and-session-bucket", 2], ["high", 3], ["authoritative", 4]]);
 
@@ -453,6 +479,9 @@ function parseGraphFilters(args: string[]): GraphFilters {
 		minConfidence: optionValue(args, "--min-confidence") ?? (minIndex >= 0 ? args[minIndex + 1] : undefined),
 		providers: parseCsvOption(args, "--provider"),
 		edgeTypes: parseCsvOption(args, "--edge-type"),
+		operationTypes: parseCsvOption(args, "--operation-type"),
+		tools: parseCsvOption(args, "--tool"),
+		repos: parseCsvOption(args, "--repo"),
 	};
 }
 
@@ -475,6 +504,12 @@ function recordPassesFilters(graph: Graph, record: RelocationRecord, filters: Gr
 		if (rank < threshold) return false;
 	}
 	if (filters.edgeTypes?.size && !filters.edgeTypes.has(recordType(record))) return false;
+	if (filters.operationTypes?.size && !filters.operationTypes.has(record.operationType ?? "")) return false;
+	if (filters.tools?.size && !filters.tools.has(record.tool ?? "")) return false;
+	if (filters.repos?.size) {
+		const repoValues = [record.sourceRepo, record.targetRepo].filter(Boolean) as string[];
+		if (!repoValues.some((repo) => filters.repos?.has(repo) || [...(filters.repos ?? [])].some((filter) => repo.includes(filter)))) return false;
+	}
 	if (filters.providers?.size) {
 		const fromProvider = graph.nodes.get(record.sourceSession)?.provider;
 		const toProvider = graph.nodes.get(record.destinationSession)?.provider;
@@ -495,6 +530,9 @@ function filterSummary(filters: GraphFilters) {
 	if (filters.minConfidence) parts.push(`min-confidence=${filters.minConfidence}`);
 	if (filters.providers?.size) parts.push(`provider=${[...filters.providers].join(",")}`);
 	if (filters.edgeTypes?.size) parts.push(`edge-type=${[...filters.edgeTypes].join(",")}`);
+	if (filters.operationTypes?.size) parts.push(`operation-type=${[...filters.operationTypes].join(",")}`);
+	if (filters.tools?.size) parts.push(`tool=${[...filters.tools].join(",")}`);
+	if (filters.repos?.size) parts.push(`repo=${[...filters.repos].join(",")}`);
 	return parts.length ? parts.join("; ") : "none";
 }
 
@@ -512,6 +550,7 @@ function graphLegend() {
 		"- `same_cwd_temporal`: low-confidence cross-provider continuity from same cwd and adjacent time order",
 		"- `same_repo_identity_temporal`: medium-confidence continuity from shared repo identity and adjacent time order",
 		"- `relocation`: explicit Pi relocation manifest edge",
+		"- `repo_move`: repo move manifest edge with top-level `operationType`, `tool`, `sourceRepo`, and `targetRepo` fields",
 		"- `pre-manifest-inferred`: curated or reconstructed pre-manifest lineage edge",
 		"- `compaction`: Pi summary/checkpoint metadata; continuity-preserving, metadata-only",
 		"",
@@ -580,11 +619,17 @@ function graphExportData(graph: Graph) {
 				provider: from.provider || to.provider || "unknown",
 				timestamp: record.ts,
 				label: [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / "),
+				operationType: record.operationType,
+				tool: record.tool,
+				mode: record.mode,
+				batchId: record.batchId,
+				sourceRepo: record.sourceRepo,
+				targetRepo: record.targetRepo,
 				inferred: record.inferred,
 				overlay: record.overlay,
 				provenance: record.provenance ?? (record.overlay ? "overlay" : record.inferred ? "derived" : "authoritative/runtime"),
 				evidence: record.evidence,
-				metadata: { fromCwd: record.fromCwd, toCwd: record.toCwd, lineageKind: record.lineageKind, displayLabel: record.displayLabel, edgeType: record.edgeType, ...(record.metadata ?? {}) },
+				metadata: { fromCwd: record.fromCwd, toCwd: record.toCwd, lineageKind: record.lineageKind, displayLabel: record.displayLabel, edgeType: record.edgeType, operationType: record.operationType, tool: record.tool, mode: record.mode, batchId: record.batchId, sourceRepo: record.sourceRepo, targetRepo: record.targetRepo, ...(record.metadata ?? {}) },
 			}];
 		}),
 	};
@@ -611,6 +656,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8d
 <select id="provider"><option value="">all providers</option></select>
 <select id="nodeType"><option value="">all node types</option></select>
 <select id="edgeType"><option value="">all edge types</option></select>
+<select id="operationType"><option value="">all operations</option></select>
+<select id="tool"><option value="">all tools</option></select>
 <select id="provenance"><option value="">all provenance</option></select>
 <select id="status"><option value="">all status</option></select>
 <label><input type="checkbox" id="hasEvidence" /> has evidence</label>
@@ -624,17 +671,19 @@ function uniq(xs){return [...new Set(xs.filter(Boolean))].sort()}function esc(s)
 for(const p of uniq(DATA.nodes.map(n=>n.provider).concat(DATA.edges.map(e=>e.provider)))) $('provider').append(new Option(p,p));
 for(const t of uniq(DATA.nodes.map(n=>n.type))) $('nodeType').append(new Option(t,t));
 for(const t of uniq(DATA.edges.map(e=>e.type))) $('edgeType').append(new Option(t,t));
+for(const t of uniq(DATA.edges.map(e=>e.operationType))) $('operationType').append(new Option(t,t));
+for(const t of uniq(DATA.edges.map(e=>e.tool))) $('tool').append(new Option(t,t));
 for(const p of uniq(DATA.nodes.map(n=>n.provenance).concat(DATA.edges.map(e=>e.provenance)))) $('provenance').append(new Option(p,p));
 for(const s of uniq(DATA.nodes.map(n=>n.status).concat(DATA.edges.map(e=>e.status)))) $('status').append(new Option(s,s));
 function matchText(obj,q){return !q || JSON.stringify(obj).toLowerCase().includes(q)}
 function neighborhood(id,hops){let ids=new Set([id]);for(let i=0;i<hops;i++)for(const e of DATA.edges)if(ids.has(e.from)||ids.has(e.to)){ids.add(e.from);ids.add(e.to)}return ids}
 function isRelation(e){return ['contradicts','supersedes','obsolete','contested'].includes(e.type)||['obsolete','contested'].includes(e.status)}
 function hasEv(x){return x.evidence||(x.metadata&&x.metadata.evidence)}
-function currentData(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, nt=$('nodeType').value, t=$('edgeType').value, prov=$('provenance').value, st=$('status').value, ev=$('hasEvidence').checked, rel=$('relations').checked;let edges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&(!prov||e.provenance===prov)&&(!st||e.status===st)&&(!ev||hasEv(e))&&(!rel||isRelation(e))&&matchText(e,q));let ids=new Set(edges.flatMap(e=>[e.from,e.to]));let nodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!nt||n.type===nt)&&(!prov||n.provenance===prov)&&(!st||n.status===st)&&(!ev||hasEv(n))&&(!q||matchText(n,q)||ids.has(n.id)));if(focus){nodes=nodes.filter(n=>focus.has(n.id));const keep=new Set(nodes.map(n=>n.id));edges=edges.filter(e=>keep.has(e.from)&&keep.has(e.to))}return {nodes,edges}}
-function show(kind,obj){selected={kind,...obj};const rows=[['kind',kind],['id',obj.id],['type',obj.type],['label',obj.label],['confidence',obj.confidence],['provenance',obj.provenance],['timestamp',obj.timestamp],['provider',obj.provider],['path',obj.path],['source',obj.sourceSession],['destination',obj.destinationSession]].filter(([,v])=>v!=null&&v!=='').map(([k,v])=>'<div class="field"><b>'+esc(k)+':</b> '+esc(v)+'</div>').join('');details.innerHTML=rows+'<h3>Metadata / evidence</h3><pre class="code">'+esc(JSON.stringify(obj.metadata??obj,null,2))+'</pre>';render()}
+function currentData(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, nt=$('nodeType').value, t=$('edgeType').value, op=$('operationType').value, tool=$('tool').value, prov=$('provenance').value, st=$('status').value, ev=$('hasEvidence').checked, rel=$('relations').checked;let edges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&(!op||e.operationType===op)&&(!tool||e.tool===tool)&&(!prov||e.provenance===prov)&&(!st||e.status===st)&&(!ev||hasEv(e))&&(!rel||isRelation(e))&&matchText(e,q));let ids=new Set(edges.flatMap(e=>[e.from,e.to]));let nodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!nt||n.type===nt)&&(!prov||n.provenance===prov)&&(!st||n.status===st)&&(!ev||hasEv(n))&&(!q||matchText(n,q)||ids.has(n.id)));if(focus){nodes=nodes.filter(n=>focus.has(n.id));const keep=new Set(nodes.map(n=>n.id));edges=edges.filter(e=>keep.has(e.from)&&keep.has(e.to))}return {nodes,edges}}
+function show(kind,obj){selected={kind,...obj};const rows=[['kind',kind],['id',obj.id],['type',obj.type],['operation',obj.operationType],['tool',obj.tool],['mode',obj.mode],['source repo',obj.sourceRepo],['target repo',obj.targetRepo],['label',obj.label],['confidence',obj.confidence],['provenance',obj.provenance],['timestamp',obj.timestamp],['provider',obj.provider],['path',obj.path],['source',obj.sourceSession],['destination',obj.destinationSession]].filter(([,v])=>v!=null&&v!=='').map(([k,v])=>'<div class="field"><b>'+esc(k)+':</b> '+esc(v)+'</div>').join('');details.innerHTML=rows+'<h3>Metadata / evidence</h3><pre class="code">'+esc(JSON.stringify(obj.metadata??obj,null,2))+'</pre>';render()}
 function render(){const {nodes,edges}=currentData();graph.innerHTML='';for(const lane of uniq(nodes.map(n=>n.label))){const box=document.createElement('div');box.className='lane';box.innerHTML='<h3>'+esc(lane)+'</h3>';for(const n of nodes.filter(n=>n.label===lane)){const el=document.createElement('button');el.className='node '+(selected?.id===n.id?'selected':'');el.textContent=n.label+' · '+n.id+(n.compactionCount?' · compact x'+n.compactionCount:'');el.onclick=()=>show('node',n);box.append(el)}graph.append(box)}const edgeBox=document.createElement('div');edgeBox.className='lane';edgeBox.innerHTML='<h3>Edges</h3>';for(const e of edges){const el=document.createElement('div');el.className='edge '+e.confidence+(selected?.id===e.id?' selected':'');el.textContent=e.label+' · '+e.from+' → '+e.to;el.onclick=()=>show('edge',e);edgeBox.append(el)}graph.append(edgeBox);$('counts').textContent=nodes.length+' nodes, '+edges.length+' edges'+(focus?' · focused':'')}
 $('hop1').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,1);render()}};$('hop2').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,2);render()}};$('resetView').onclick=()=>{focus=null;render()};$('exportSubgraph').onclick=()=>{details.textContent=JSON.stringify(currentData(),null,2)};$('exportMermaid').onclick=()=>{const {nodes,edges}=currentData(),ids=new Map(nodes.map(n=>[n.id,n]));details.textContent=['graph TD',...nodes.map(n=>'  '+n.id+'["'+n.label.replace(/"/g,'&quot;')+'"]'),...edges.filter(e=>ids.has(e.from)&&ids.has(e.to)).map(e=>'  '+e.from+' -->|'+e.type+'| '+e.to)].join('\n')};
-for(const id of ['search','confidence','provider','nodeType','edgeType','provenance','status','hasEvidence','relations']) $(id).addEventListener('input',render); render();</script>
+for(const id of ['search','confidence','provider','nodeType','edgeType','operationType','tool','provenance','status','hasEvidence','relations']) $(id).addEventListener('input',render); render();</script>
 </body></html>`;
 	const htmlPath = join(dir, `session_graph_viewer_${stamp}.html`);
 	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });
@@ -834,7 +883,7 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 		const filtered = filterGraph(scoped, filters);
 		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
 	}
-	return "Usage: pigraph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
+	return "Usage: pigraph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b] [--repo text]";
 }
 
 export default function (pi: ExtensionAPI) {

@@ -1,6 +1,6 @@
 ---
 id: psg-top-level-repo-move-fields
-status: open
+status: closed
 type: feature
 priority: 2
 created: 2026-06-01T00:00:00Z
