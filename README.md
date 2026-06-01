@@ -12,6 +12,8 @@ Lightweight Pi extension for viewing prepared session lineage, logical thread, c
 /session-graph leaves [--all]
 /session-graph repos
 /session-graph mermaid [--all] [--min-confidence <level>] [--provider pi,codex] [--edge-type relocation]
+/session-graph html
+/session-graph temporal [--output path]
 ```
 
 Compatibility aliases remain available:
@@ -29,6 +31,7 @@ A CLI entrypoint is also exposed for non-chat graph/status use:
 pi-session-graph status
 pi-session-graph mermaid --all
 pi-session-graph html
+pi-session-graph temporal [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
 ```
 
 
@@ -58,6 +61,12 @@ Existing top-level graph commands remain compatibility aliases for now.
 Preferred input:
 
 ```text
+~/.pi/agent/session-store/graph-export.json
+```
+
+Legacy store input:
+
+```text
 ~/.pi/agent/session-graph/curated-store.json
 ```
 
@@ -77,11 +86,12 @@ Fallback inputs:
 
 ## What it displays
 
-- session nodes and relocation/overlay edges
+- session nodes and relocation/overlay/compaction edges
 - current lineage, leaves, roots, and fork points
 - classifications/display labels from the canonical store
 - logical thread counts and membership-derived summaries
 - repo identity/event records when exported by `agent-session-store`
+- canonical temporal activity spans, work bursts, activity metrics, and compaction metadata
 
 Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/archive events, and time-use reports are curated in `agent-session-store` and exported for display.
 
@@ -108,9 +118,14 @@ pi -e ./index.ts
 
 ## Boundaries
 
+`agent-session-store` / `pi-session-store` owns provider imports, canonical SQLite/JSON exports, lineage/continuity/compaction/fork derivation, repo identity and alias facts, temporal work bursts, and provider/activity metrics.
+
+`pi-session-graph` owns read-only rendering/navigation: Pi current-session commands, CLI/static HTML generation, Mermaid graph output, temporal viewers, filters, search, grouping, legends, and detail panels over prepared exports.
+
 - Does not mutate session JSONLs.
 - Does not rewrite `~/.pi/agent/relocations.jsonl`.
 - Does not infer repo identity from raw content.
+- Does not compute temporal/activity metrics from raw sessions.
 - Does not perform backup extraction/reconstruction.
 
 Use `agent-session-store` for canonical store rebuilds, repo identity curation, bucket reconciliation, graph exports, and reports.
@@ -127,4 +142,19 @@ Or inside Pi:
 /session-graph html
 ```
 
-The viewer reads prepared graph data, supports search and confidence/provider/edge-type filters, and writes `session-graph/session_graph_viewer_<timestamp>.html`. Temporal rendering is intentionally deferred until `agent-session-store` exports canonical temporal activity data.
+The viewer reads prepared graph data, supports search and confidence/provider/edge-type filters, shows compaction counts in node details, and writes `session-graph/session_graph_viewer_<timestamp>.html`.
+
+## Temporal HTML viewer
+
+```bash
+pi-session-graph temporal
+pi-session-graph temporal --input ~/.pi/agent/session-store/graph-export.json --output /tmp/temporal.html
+```
+
+Or inside Pi:
+
+```text
+/session-graph temporal
+```
+
+The temporal viewer renders prepared `graph-export.json` records: `temporalActivitySpans`, `workBursts`, `activityMetrics`, and `compactionEvents`. It can group by project/cwd lane, provider, or session; the sticky legend explains wall-clock spans vs accrued activity metrics and compaction/checkpoint badges.

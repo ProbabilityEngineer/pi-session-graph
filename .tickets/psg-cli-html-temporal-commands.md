@@ -1,6 +1,6 @@
 ---
 id: psg-cli-html-temporal-commands
-status: open
+status: closed
 deps: [psg-extension-cli-split]
 links:
   - psg-html-graph-viewer
@@ -29,3 +29,8 @@ After defining the extension/CLI split, add CLI commands for large graph outputs
 ## Progress
 
 Implemented the package `bin` entrypoint and initial `pi-session-graph html`/`pi-session-graph mermaid`/status-style commands. `pi-session-graph temporal` is intentionally blocked until `agent-session-store` exports canonical temporal activity spans and effort metrics.
+
+
+## Closure
+
+Completed CLI temporal command with --input and --output path support; existing html/mermaid/status commands remain preserved.

@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 const MANIFEST = "relocations.jsonl";
 const OVERLAYS = "session-graph/lineage-overlays.jsonl";
 const CURATED_STORE = "session-graph/curated-store.json";
+const GRAPH_EXPORT = "session-store/graph-export.json";
 
 type RelocationRecord = {
 	ts: string;
@@ -30,7 +31,7 @@ type OverlayRecord =
 	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
 type StoreExport = {
-	sessions?: { id: string; canonicalKey: string; provider?: string; metadata?: { cwd?: string; displayName?: string; provider?: string } }[];
+	sessions?: { id: string; canonicalKey: string; provider?: string; providerSessionId?: string; startTimestamp?: string; endTimestamp?: string; lineCount?: number; byteCount?: number; metadata?: { cwd?: string; displayName?: string; provider?: string } }[];
 	edges?: { id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } }[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
@@ -39,6 +40,10 @@ type StoreExport = {
 	repoIdentities?: { id: string; stableName: string; displayName?: string; description?: string; confidence?: string }[];
 	repoObservations?: { repoIdentityId: string; path?: string; bucket?: string; remoteUrl?: string; validFrom?: string; validTo?: string; confidence?: string }[];
 	repoEvents?: { eventType: string; repoIdentityId?: string; relatedRepoIdentityId?: string; fromPath?: string; toPath?: string; timestamp?: string; confidence?: string; manualReviewRequired?: boolean; summary?: string }[];
+	compactionEvents?: { id: string; sessionId: string; timestamp?: string; confidence?: string; eventCount?: number; summaryEventCount?: number; compactedLineCount?: number; compactedCharCount?: number; firstCompactionAt?: string; lastCompactionAt?: string; summary?: string; metadata?: { path?: string; eventCount?: number; summaryEventCount?: number } }[];
+	temporalActivitySpans?: { id: string; sessionId?: string; provider?: string; cwd?: string; label?: string; start?: string; end?: string; lineCount?: number; byteCount?: number; activityScore?: number; confidence?: string; provenance?: string }[];
+	workBursts?: { id: string; repoIdentityId?: string; sessionIds?: string[]; providers?: string[]; start?: string; end?: string; sessionCount?: number; confidence?: string; provenance?: string }[];
+	activityMetrics?: { id: string; provider?: string; cwd?: string; sessionCount?: number; eventCount?: number; messageCount?: number; toolCount?: number; lineCount?: number; byteCount?: number; activityScore?: number; firstStart?: string; lastEnd?: string; confidence?: string; provenance?: string; missingDataNotes?: string[] }[];
 };
 
 type SessionNode = {
@@ -47,6 +52,7 @@ type SessionNode = {
 	cwd: string;
 	label: string;
 	provider?: string;
+	compactionCount?: number;
 };
 
 type LogicalThread = { id: string; label: string; members: { sessionPath: string; role?: string; ordinal?: number }[] };
@@ -62,6 +68,10 @@ type Graph = {
 	source: "store" | "legacy";
 	logicalThreads?: LogicalThread[];
 	repoIdentities?: RepoIdentity[];
+	compactionEvents?: StoreExport["compactionEvents"];
+	temporalActivitySpans?: StoreExport["temporalActivitySpans"];
+	workBursts?: StoreExport["workBursts"];
+	activityMetrics?: StoreExport["activityMetrics"];
 };
 
 function agentDir() {
@@ -78,6 +88,10 @@ function overlayFile() {
 
 function curatedStoreFile() {
 	return join(agentDir(), CURATED_STORE);
+}
+
+function graphExportFile() {
+	return join(agentDir(), GRAPH_EXPORT);
 }
 
 function shortHash(value: string) {
@@ -142,15 +156,17 @@ async function readOverlays(): Promise<OverlayRecord[]> {
 	return readJsonl<OverlayRecord>(overlayFile());
 }
 
-function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>(), provider?: string) {
+function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>(), provider?: string, compactionCount?: number) {
 	if (!path || path.startsWith("(")) return;
 	if (!nodes.has(path)) {
 		const base = cwdLabel(cwd);
 		const alias = aliases.get(cwd);
 		const label = alias && alias !== base ? `${base} (${alias})` : base;
-		nodes.set(path, { id: sessionId(path), path, cwd, label, provider });
-	} else if (provider) {
-		nodes.get(path)!.provider = provider;
+		nodes.set(path, { id: sessionId(path), path, cwd, label, provider, compactionCount });
+	} else {
+		const node = nodes.get(path)!;
+		if (provider) node.provider = provider;
+		if (compactionCount != null) node.compactionCount = (node.compactionCount ?? 0) + compactionCount;
 	}
 }
 
@@ -216,6 +232,24 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		observations: (store.repoObservations ?? []).filter((obs) => obs.repoIdentityId === repo.id),
 		events: (store.repoEvents ?? []).filter((event) => event.repoIdentityId === repo.id || event.relatedRepoIdentityId === repo.id),
 	}));
+	for (const compaction of store.compactionEvents ?? []) {
+		const session = sessionsById.get(compaction.sessionId);
+		if (!session) continue;
+		const count = compaction.eventCount ?? compaction.summaryEventCount ?? compaction.metadata?.eventCount ?? compaction.metadata?.summaryEventCount ?? 1;
+		records.push({
+			ts: compaction.timestamp ?? compaction.lastCompactionAt ?? compaction.firstCompactionAt ?? "(compaction)",
+			fromCwd: labelByTarget.get(session.id) ?? session.metadata?.cwd ?? "(store/unknown)",
+			toCwd: labelByTarget.get(session.id) ?? session.metadata?.cwd ?? "(store/unknown)",
+			sourceSession: session.canonicalKey,
+			destinationSession: session.canonicalKey,
+			inferred: false,
+			confidence: compaction.confidence ?? "authoritative",
+			lineageKind: "compaction",
+			displayLabel: `compact x${count}`,
+			edgeType: "compaction",
+			overlay: false,
+		});
+	}
 	for (const edge of store.edges ?? []) {
 		const source = sessionsById.get(edge.sourceSessionId);
 		const target = sessionsById.get(edge.targetSessionId);
@@ -242,6 +276,17 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		if (node && explicit) node.label = explicit;
 		if (node) node.provider = session.provider ?? session.metadata?.provider;
 	}
+	const compactionCounts = new Map<string, number>();
+	for (const compaction of store.compactionEvents ?? []) compactionCounts.set(compaction.sessionId, (compactionCounts.get(compaction.sessionId) ?? 0) + (compaction.eventCount ?? compaction.summaryEventCount ?? 1));
+	for (const [sessionId, count] of compactionCounts) {
+		const session = sessionsById.get(sessionId);
+		const node = session ? graph.nodes.get(session.canonicalKey) : undefined;
+		if (node) node.compactionCount = count;
+	}
+	graph.compactionEvents = store.compactionEvents;
+	graph.temporalActivitySpans = store.temporalActivitySpans;
+	graph.workBursts = store.workBursts;
+	graph.activityMetrics = store.activityMetrics;
 	return graph;
 }
 
@@ -252,8 +297,8 @@ async function buildLegacyGraph(): Promise<Graph> {
 	return graphFromRecords([...overlayEdges(overlays), ...manifestRecords], overlays, aliases, "legacy");
 }
 
-async function buildGraph(): Promise<Graph> {
-	const store = await readJson<StoreExport>(curatedStoreFile());
+async function buildGraph(inputPath?: string): Promise<Graph> {
+	const store = await readJson<StoreExport>(inputPath ?? graphExportFile()) ?? await readJson<StoreExport>(curatedStoreFile());
 	return buildStoreGraph(store ?? {}) ?? await buildLegacyGraph();
 }
 
@@ -275,12 +320,12 @@ function lineageFor(graph: Graph, session?: string) {
 }
 
 function leaves(graph: Graph) {
-	const sourceSet = new Set(graph.records.map((record) => record.sourceSession));
+	const sourceSet = new Set(graph.records.filter((record) => record.sourceSession !== record.destinationSession).map((record) => record.sourceSession));
 	return [...graph.nodes.values()].filter((node) => !sourceSet.has(node.path));
 }
 
 function roots(graph: Graph) {
-	const destinationSet = new Set(graph.records.map((record) => record.destinationSession));
+	const destinationSet = new Set(graph.records.filter((record) => record.sourceSession !== record.destinationSession).map((record) => record.destinationSession));
 	return [...graph.nodes.values()].filter((node) => !destinationSet.has(node.path));
 }
 
@@ -348,10 +393,17 @@ function parseCsvOption(args: string[], name: string) {
 	return value ? new Set(value.split(",").map((part) => part.trim()).filter(Boolean)) : undefined;
 }
 
+function optionValue(args: string[], name: string) {
+	const prefix = `${name}=`;
+	const inline = args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+	const index = args.indexOf(name);
+	return inline ?? (index >= 0 ? args[index + 1] : undefined);
+}
+
 function parseGraphFilters(args: string[]): GraphFilters {
 	const minIndex = args.indexOf("--min-confidence");
 	return {
-		minConfidence: args.find((arg) => arg.startsWith("--min-confidence="))?.split("=")[1] ?? (minIndex >= 0 ? args[minIndex + 1] : undefined),
+		minConfidence: optionValue(args, "--min-confidence") ?? (minIndex >= 0 ? args[minIndex + 1] : undefined),
 		providers: parseCsvOption(args, "--provider"),
 		edgeTypes: parseCsvOption(args, "--edge-type"),
 	};
@@ -397,6 +449,7 @@ function graphLegend() {
 		"",
 		"- `-->` explicit/authoritative continuation edge",
 		"- `-.->` inferred, derived, overlay, or lower-confidence edge",
+		"- `==>` compaction/checkpoint summary event inside a session",
 		"- `★` current session, when known",
 		"- Mermaid subgraphs are lane/row delimiters grouped by cwd/repo label",
 		"- edge label format: `date / edge type or classification / confidence`",
@@ -405,6 +458,7 @@ function graphLegend() {
 		"- `same_repo_identity_temporal`: medium-confidence continuity from shared repo identity and adjacent time order",
 		"- `relocation`: explicit Pi relocation manifest edge",
 		"- `pre-manifest-inferred`: curated or reconstructed pre-manifest lineage edge",
+		"- `compaction`: Pi summary/checkpoint metadata; continuity-preserving, metadata-only",
 		"",
 	].join("\n");
 }
@@ -439,11 +493,11 @@ function mermaid(graph: Graph, current?: string) {
 		const from = graph.nodes.get(record.sourceSession);
 		const to = graph.nodes.get(record.destinationSession);
 		if (!from || !to) continue;
-		const style = record.inferred ? "-.->" : "-->";
+		const style = record.edgeType === "compaction" ? "==>" : record.inferred ? "-.->" : "-->";
 		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
 		lines.push(`  ${from.id} ${style}|${mermaidLabel(edgeLabel)}| ${to.id}`);
 	}
-	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LANES[lane boxes group cwd/repo rows]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
+	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_COMPACTION[compaction/checkpoint] ==> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LANES[lane boxes group cwd/repo rows]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
 	return lines.join("\n");
 }
 
@@ -453,7 +507,7 @@ function timestamp() {
 
 function graphExportData(graph: Graph) {
 	return {
-		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider })),
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider, compactionCount: node.compactionCount ?? 0 })),
 		edges: graph.records.flatMap((record, index) => {
 			const from = graph.nodes.get(record.sourceSession);
 			const to = graph.nodes.get(record.destinationSession);
@@ -511,6 +565,28 @@ for(const id of ['search','confidence','provider','edgeType']) $(id).addEventLis
 	const htmlPath = join(dir, `session_graph_viewer_${stamp}.html`);
 	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });
 	return htmlPath;
+}
+
+async function writeTemporalHtml(cwd: string, graph: Graph, outputPath?: string) {
+	const dir = outputPath ? undefined : join(cwd, "session-graph");
+	if (dir) await mkdir(dir, { recursive: true });
+	const spans = graph.temporalActivitySpans ?? [];
+	const bursts = graph.workBursts ?? [];
+	const metrics = graph.activityMetrics ?? [];
+	const compactions = graph.compactionEvents ?? [];
+	const data = JSON.stringify({ spans, bursts, metrics, compactions }).replace(/</g, "\\u003c");
+	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>Pi Session Temporal View</title><style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#111827;color:#e5e7eb}header{position:sticky;top:0;z-index:2;background:#0f172a;border-bottom:1px solid #334155;padding:12px 16px}.legend{margin-top:8px;padding:8px;border:1px solid #334155;border-radius:8px;background:#172033}button,input,select{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:6px;padding:4px 6px;margin-right:8px}main{display:grid;grid-template-columns:1fr 360px;height:calc(100vh - 112px)}#timeline{overflow:auto;padding:16px}.lane{margin:0 0 10px}.lane h3{font-size:13px;margin:0 0 4px;color:#cbd5e1}.bar{height:18px;border-radius:4px;background:#60a5fa;margin:2px 0;position:relative;cursor:pointer}.bar.pi{background:#22c55e}.bar.codex{background:#a78bfa}.bar.claude{background:#f59e0b}.burst{height:8px;background:#f97316;border-radius:4px;margin-top:2px}.compact{display:inline-block;background:#eab308;color:#111827;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:11px}aside{border-left:1px solid #334155;padding:16px;background:#0f172a;overflow:auto}.muted{color:#94a3b8}.hidden{display:none}</style></head><body><header><strong>Canonical temporal activity</strong> <input id="search" placeholder="filter provider/cwd/label" size="34"/><select id="group"><option value="label">project/cwd lane</option><option value="provider">provider</option><option value="sessionId">session</option></select><button id="toggleLegend">toggle legend</button><span id="counts" class="muted"></span><div id="legend" class="legend">Renders prepared <code>graph-export.json</code> temporalActivitySpans, workBursts, activityMetrics, and compactionEvents. Bars show session activity spans, not wall-clock repo-open duration. Orange ticks are store-derived work bursts. Yellow badges are compaction/checkpoint counts. Accrued effort metrics are provider/cwd aggregates exported by agent-session-store.</div></header><main><section id="timeline"></section><aside><h2>Details</h2><pre id="details">Select a span, burst, or metric.</pre></aside></main><script>const DATA=${data};const $=id=>document.getElementById(id),timeline=$('timeline'),details=$('details');
+function time(x){const t=Date.parse(x||'');return Number.isFinite(t)?t:0}function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}function keyOf(s,g){return s[g]||s.label||s.cwd||s.provider||'unknown'}function compactCount(s){return DATA.compactions.filter(c=>c.sessionId&&c.sessionId===s.sessionId).reduce((n,c)=>n+(c.eventCount||c.summaryEventCount||1),0)}
+$('toggleLegend').onclick=()=>$('legend').classList.toggle('hidden');function render(){const q=$('search').value.toLowerCase(),g=$('group').value;const spans=DATA.spans.filter(s=>!q||JSON.stringify(s).toLowerCase().includes(q));const min=Math.min(...spans.map(s=>time(s.start)).filter(Boolean));const max=Math.max(...spans.map(s=>time(s.end)||time(s.start)).filter(Boolean));const width=Math.max(900, timeline.clientWidth-40);timeline.innerHTML='';const groups=[...new Set(spans.map(s=>keyOf(s,g)))].sort();for(const lane of groups){const box=document.createElement('div');box.className='lane';box.innerHTML='<h3>'+esc(lane)+'</h3>';for(const s of spans.filter(s=>keyOf(s,g)===lane)){const left=max>min?((time(s.start)-min)/(max-min))*width:0;const right=max>min?(((time(s.end)||time(s.start))-min)/(max-min))*width:left+6;const bar=document.createElement('div');bar.className='bar '+esc(s.provider);bar.style.marginLeft=Math.max(0,left)+'px';bar.style.width=Math.max(6,right-left)+'px';bar.textContent=(s.provider||'')+' '+(compactCount(s)?' compact x'+compactCount(s):'');bar.onclick=()=>details.textContent=JSON.stringify({...s,compactionCount:compactCount(s)},null,2);box.append(bar)}timeline.append(box)}const b=document.createElement('div');b.className='lane';b.innerHTML='<h3>Work bursts / accrued effort</h3>';for(const burst of DATA.bursts){const el=document.createElement('div');el.className='burst';el.title=JSON.stringify(burst);el.onclick=()=>details.textContent=JSON.stringify(burst,null,2);b.append(el)}for(const metric of DATA.metrics.slice(0,80)){const el=document.createElement('button');el.textContent=(metric.provider||'provider')+' '+(metric.cwd||'')+' sessions='+metric.sessionCount+' lines='+(metric.lineCount||0);el.onclick=()=>details.textContent=JSON.stringify(metric,null,2);b.append(el)}timeline.append(b);$('counts').textContent=spans.length+' spans, '+DATA.bursts.length+' bursts, '+DATA.compactions.length+' compactions'}for(const id of ['search','group'])$(id).addEventListener('input',render);render();</script></body></html>`;
+	const htmlPath = outputPath ?? join(dir!, `temporal_graph_${timestamp()}.html`);
+	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });
+	return htmlPath;
+}
+
+async function temporalWriteLines(cwd: string, graph: Graph, outputPath?: string) {
+	const htmlPath = await writeTemporalHtml(cwd, graph, outputPath);
+	return ["Canonical temporal HTML", "", `Source: ${graph.source}`, `Spans: ${graph.temporalActivitySpans?.length ?? 0}`, `Work bursts: ${graph.workBursts?.length ?? 0}`, `Activity metrics: ${graph.activityMetrics?.length ?? 0}`, `Compactions: ${graph.compactionEvents?.length ?? 0}`, "", "Wrote:", shortPath(htmlPath)];
 }
 
 async function writeGraphFiles(cwd: string, graph: Graph, current?: string, filters: GraphFilters = {}) {
@@ -639,7 +715,8 @@ async function graphWriteLines(cwd: string, graph: Graph, current: string | unde
 		all ? "Session graph (all)" : "Session graph (current component)",
 		"",
 		`Source: ${graph.source}`,
-		`Store: ${shortPath(curatedStoreFile())}`,
+		`Graph export: ${shortPath(graphExportFile())}`,
+		`Legacy store fallback: ${shortPath(curatedStoreFile())}`,
 		`Manifest fallback: ${shortPath(manifestFile())}`,
 		`Overlay fallback: ${shortPath(overlayFile())}`,
 		`Active filters: ${filterSummary(filters)}`,
@@ -666,7 +743,9 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	const subcommand = argv[0] ?? "status";
 	const rest = argv.slice(1);
 	const flags = new Set(rest);
-	const graph = await buildGraph();
+	const inputPath = optionValue(rest, "--input");
+	const outputPath = optionValue(rest, "--output");
+	const graph = await buildGraph(inputPath);
 	const current = process.env.PI_SESSION_FILE;
 	const filters = parseGraphFilters(rest);
 	if (subcommand === "status") return statusLines(graph, current, cwd).join("\n");
@@ -674,13 +753,13 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	if (subcommand === "leaves") return leavesLines(graph, current, flags.has("--all")).join("\n");
 	if (subcommand === "repos") return reposLines(graph).join("\n");
 	if (subcommand === "html") return htmlWriteLines(cwd, filterGraph(graph, filters)).then((lines) => lines.join("\n"));
+	if (subcommand === "temporal") return temporalWriteLines(cwd, graph, outputPath).then((lines) => lines.join("\n"));
 	if (subcommand === "mermaid" || subcommand === "graph") {
 		const scoped = flags.has("--all") ? graph : graph;
 		const filtered = filterGraph(scoped, filters);
 		return graphWriteLines(cwd, filtered, current, flags.has("--all"), filters).then((lines) => lines.join("\n"));
 	}
-	if (subcommand === "temporal") return "Temporal rendering needs canonical temporal activity exports from agent-session-store before this CLI can implement it.";
-	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
+	return "Usage: pi-session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -727,9 +806,9 @@ export default function (pi: ExtensionAPI) {
 			if (subcommand === "leaves") return ctx.ui.notify(leavesLines(full, current, flags.has("--all")).join("\n"), "info");
 			if (subcommand === "repos") return ctx.ui.notify(reposLines(full).join("\n"), "info");
 			if (subcommand === "html") return ctx.ui.notify((await htmlWriteLines(ctx.cwd, filterGraph(full, filters))).join("\n"), "info");
-			if (subcommand === "temporal") return ctx.ui.notify("Temporal rendering needs canonical temporal activity exports from agent-session-store before this command can be implemented.", "warning");
+			if (subcommand === "temporal") return ctx.ui.notify((await temporalWriteLines(ctx.cwd, full, optionValue(rest, "--output"))).join("\n"), "info");
 			if (subcommand !== "mermaid" && subcommand !== "graph") {
-				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
+				return ctx.ui.notify("Usage: /session-graph [status|lineage|leaves|repos|mermaid|html|temporal] [--all] [--files] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b]", "warning");
 			}
 			const scoped = flags.has("--all") ? full : componentGraph(full, current);
 			const graph = filterGraph(scoped, filters);

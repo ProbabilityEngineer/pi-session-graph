@@ -1,6 +1,6 @@
 ---
 id: psg-agent-accrued-effort-lanes
-status: open
+status: closed
 deps: [psg-canonical-temporal-html]
 links:
   - ../agent-session-store/.tickets/ass-agent-effort-metrics.md
@@ -25,3 +25,8 @@ Temporal session views currently emphasize how long a repo/worktree lane has bee
 ## Boundary note
 
 Effort/activity metrics should be computed/exported by `agent-session-store`. This ticket renders those metrics across repo lanes and explains them in the viewer.
+
+
+## Closure
+
+Rendered exported activityMetrics in the temporal viewer as accrued effort controls/details distinct from wall-clock session span bars, with legend text explaining the difference.

@@ -1,6 +1,6 @@
 ---
 id: psg-compaction-edges
-status: open
+status: closed
 type: feature
 priority: 2
 created: 2026-05-31T20:05:00Z
@@ -27,3 +27,8 @@ Possible labels:
 - `compact x6`
 
 Compaction should be represented as a continuity-preserving event, probably higher confidence than same-cwd temporal inference when Pi metadata explicitly records it.
+
+
+## Closure
+
+Implemented rendering of canonical compactionEvents as compaction graph edges, Mermaid ==> style/legend entries, node compaction counts in HTML data/details, edge-type filtering via existing --edge-type compaction, and temporal compaction badges.

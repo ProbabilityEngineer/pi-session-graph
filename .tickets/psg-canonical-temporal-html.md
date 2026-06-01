@@ -1,6 +1,6 @@
 ---
 id: psg-canonical-temporal-html
-status: open
+status: closed
 deps: [psg-html-graph-viewer]
 links:
   - ../agent-session-store/.tickets/ass-cyp-project-alias.md
@@ -26,3 +26,8 @@ The existing temporal HTML is based on older Pi relocation/reconstruction inputs
 ## Boundary note
 
 This ticket is rendering/viewer work. Canonical temporal lanes, work bursts, provider activity counts, and repo identity aliases should be exported by `agent-session-store`; this repo should render and filter those prepared records.
+
+
+## Closure
+
+Implemented pi-session-graph temporal over canonical graph-export.json temporalActivitySpans/workBursts/activityMetrics/compactionEvents with grouping by project/cwd label, provider, or session and detail panes.

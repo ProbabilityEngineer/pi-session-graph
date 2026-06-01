@@ -1,6 +1,6 @@
 ---
 id: psg-store-graph-boundary
-status: open
+status: closed
 deps: []
 links:
   - ../agent-session-store/.tickets/ass-graph-export-contract.md
@@ -40,3 +40,8 @@ Clarify that `agent-session-store` owns canonical data/projections and `pi-sessi
 - Temporal tickets in this repo explicitly consume prepared temporal/activity exports rather than parsing raw sessions.
 - HTML viewer work reads `graph-export.json`/future graph contracts and does not duplicate store inference.
 - Follow-up data-contract tickets exist in `agent-session-store`.
+
+
+## Closure
+
+Documented store/graph rendering boundary in README and updated temporal docs to consume prepared graph-export records rather than raw sessions.
