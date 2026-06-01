@@ -173,6 +173,10 @@ function cwdLabel(cwd: string) {
 	return basename(cwd) || cwd;
 }
 
+function pathLabel(cwd: string | undefined, path: string) {
+	return cwd && !cwd.startsWith("(") ? cwdLabel(cwd) : cwdLabel(path);
+}
+
 function marker(record: RelocationRecord) {
 	const kind = record.displayLabel ?? record.lineageKind ?? record.edgeType;
 	if (record.overlay) return kind ? `overlay/${kind}` : "overlay";
@@ -627,6 +631,14 @@ function timestamp() {
 	return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function titleFromType(type: string) {
+	return type.split("-").map((word) => word[0]?.toUpperCase() + word.slice(1)).join(" ");
+}
+
+function escapeHtml(value: unknown) {
+	return String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]!));
+}
+
 function graphExportData(graph: Graph) {
 	return {
 		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0 })),
@@ -891,29 +903,109 @@ async function graphWriteLines(cwd: string, graph: Graph, current: string | unde
 	return lines;
 }
 
+function graphTime(node: SessionNode, records: RelocationRecord[]) {
+	const candidates = [node.timestamp, ...records.flatMap((record) => record.sourceSession === node.path || record.destinationSession === node.path ? [record.ts] : [])]
+		.map((ts) => Date.parse(ts ?? ""))
+		.filter(Number.isFinite);
+	return candidates.length ? Math.min(...candidates) : 0;
+}
+
+function lineageSvgHtml(graph: Graph, type: "lineage-full" | "lineage-focused", stamp: string) {
+	const title = `${stamp} — ${titleFromType(type)}`;
+	const edgeNodes = new Set(graph.records.flatMap((record) => [record.sourceSession, record.destinationSession]));
+	const nodes = [...graph.nodes.values()]
+		.filter((node) => type === "lineage-full" || edgeNodes.has(node.path))
+		.sort((a, b) => graphTime(a, graph.records) - graphTime(b, graph.records) || a.label.localeCompare(b.label));
+	const keep = new Set(nodes.map((node) => node.path));
+	const edges = graph.records.filter((record) => keep.has(record.sourceSession) && keep.has(record.destinationSession));
+	const width = Math.max(1200, nodes.length * 170 + 220);
+	const height = Math.max(700, Math.min(2200, 160 + Math.ceil(nodes.length / 6) * 130));
+	const lanes = [...new Set(nodes.map((node) => node.label || node.cwd || "unknown"))].sort();
+	const laneY = new Map(lanes.map((lane, index) => [lane, 100 + (index % Math.max(1, Math.floor((height - 180) / 90))) * 90]));
+	const positions = new Map<string, { x: number; y: number }>();
+	nodes.forEach((node, index) => positions.set(node.path, { x: 120 + index * 170, y: laneY.get(node.label || node.cwd || "unknown") ?? 120 }));
+	const lines = [
+		`<svg id="graph-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">`,
+		`<style>.edge{stroke:#60a5fa;stroke-width:1.5;fill:none;opacity:.65}.node{fill:#1e293b;stroke:#93c5fd;stroke-width:1.2}.label{font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#e5e7eb}.small{font:10px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#94a3b8}.lane{stroke:#334155;stroke-width:1;stroke-dasharray:4 4}</style>`,
+		...lanes.map((lane) => `<text class="small" x="12" y="${(laneY.get(lane) ?? 100) - 32}">${escapeHtml(lane)}</text><line class="lane" x1="0" y1="${(laneY.get(lane) ?? 100) - 25}" x2="${width}" y2="${(laneY.get(lane) ?? 100) - 25}"/>`),
+	];
+	for (const edge of edges) {
+		const from = positions.get(edge.sourceSession), to = positions.get(edge.destinationSession);
+		if (!from || !to) continue;
+		const mid = Math.max(25, Math.abs(to.x - from.x) / 2);
+		lines.push(`<path class="edge" d="M ${from.x + 130} ${from.y + 22} C ${from.x + mid} ${from.y - 35}, ${to.x - mid} ${to.y - 35}, ${to.x} ${to.y + 22}"><title>${escapeHtml(`${edge.ts} ${edge.displayLabel ?? edge.lineageKind ?? edge.edgeType ?? "edge"}`)}</title></path>`);
+	}
+	for (const node of nodes) {
+		const pos = positions.get(node.path)!;
+		lines.push(`<g><rect class="node" x="${pos.x}" y="${pos.y}" rx="8" width="138" height="50"><title>${escapeHtml(node.path)}</title></rect><text class="label" x="${pos.x + 8}" y="${pos.y + 20}">${escapeHtml(node.label).slice(0, 22)}</text><text class="small" x="${pos.x + 8}" y="${pos.y + 38}">${escapeHtml(node.id)}</text></g>`);
+	}
+	lines.push(`</svg>`);
+	return htmlShell(title, `<p>${type === "lineage-full" ? "All known session graph nodes with available edges." : "Only sessions participating in relocation/session-move/repo-move/overlay edges."} No Mermaid is used.</p><div class="wrap">${lines.join("\n")}</div><h2>Edges</h2><ol>${edges.map((edge) => `<li>${escapeHtml(edge.ts)} — ${escapeHtml(pathLabel(edge.fromCwd, edge.sourceSession))} → ${escapeHtml(pathLabel(edge.toCwd, edge.destinationSession))}</li>`).join("\n")}</ol>`);
+}
+
+function timelineHtml(graph: Graph, type: "timeline-projects" | "timeline-sessions", stamp: string) {
+	const title = `${stamp} — ${titleFromType(type)}`;
+	const groupBySession = type === "timeline-sessions";
+	const events = graph.records
+		.filter((event) => Number.isFinite(Date.parse(event.ts)))
+		.sort((a, b) => a.ts.localeCompare(b.ts));
+	const groups = [...new Set(events.flatMap((event) => groupBySession ? [event.sourceSession, event.destinationSession] : [pathLabel(event.fromCwd, event.sourceSession), pathLabel(event.toCwd, event.destinationSession)]))].sort();
+	const min = Math.min(...events.map((event) => Date.parse(event.ts)), Date.now());
+	const max = Math.max(...events.map((event) => Date.parse(event.ts)), min + 1);
+	const width = 2200, rowHeight = 34, left = 310, height = Math.max(360, 90 + groups.length * rowHeight);
+	const rowY = new Map(groups.map((group, index) => [group, 58 + index * rowHeight]));
+	const x = (ts: string) => left + ((Date.parse(ts) - min) / Math.max(1, max - min)) * (width - left - 80);
+	const svg = [`<svg id="timeline-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}">`, `<style>.row{font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#e5e7eb}.grid{stroke:#334155}.event{fill:#fbbf24;stroke:#d97706}.edge{stroke:#22c55e;fill:none;opacity:.75}.small{font:10px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#94a3b8}</style>`];
+	for (const group of groups) { const y = rowY.get(group)!; svg.push(`<text class="row" x="10" y="${y + 4}">${escapeHtml(shortPath(group)).slice(0, 45)}</text><line class="grid" x1="0" y1="${y + 14}" x2="${width}" y2="${y + 14}"/>`); }
+	for (const event of events) {
+		const source = groupBySession ? event.sourceSession : pathLabel(event.fromCwd, event.sourceSession);
+		const dest = groupBySession ? event.destinationSession : pathLabel(event.toCwd, event.destinationSession);
+		const sx = x(event.ts), sy = rowY.get(source), dy = rowY.get(dest);
+		if (sy == null || dy == null) continue;
+		svg.push(`<circle class="event" cx="${sx.toFixed(1)}" cy="${sy}" r="5"><title>${escapeHtml(`${event.ts} ${source} -> ${dest}`)}</title></circle><path class="edge" d="M ${sx.toFixed(1)} ${sy} C ${(sx + 35).toFixed(1)} ${sy}, ${(sx + 35).toFixed(1)} ${dy}, ${sx.toFixed(1)} ${dy}"><title>${escapeHtml(event.displayLabel ?? event.lineageKind ?? event.edgeType ?? "edge")}</title></path>`);
+	}
+	svg.push(`</svg>`);
+	return htmlShell(title, `<p>${groupBySession ? "Timeline grouped by individual session file." : "Timeline grouped by project/folder label."} Yellow dots are source events; green curves connect destination rows at the same timestamp.</p><div class="wrap">${svg.join("\n")}</div>`);
+}
+
+function htmlShell(title: string, body: string) {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:2rem;line-height:1.4}.wrap{height:82vh;overflow:auto;border:1px solid #334155;border-radius:10px;background:#0f172a}svg{width:100%;height:100%}a{color:#93c5fd}ol{max-height:40vh;overflow:auto}.muted{color:#94a3b8}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>\n`;
+}
+
+async function sessionGraphsWriteLines(graph: Graph) {
+	await refreshStoreExport();
+	graph = await buildGraph();
+	const dir = join(desktopOutputRoot(), "session-graphs");
+	await mkdir(dir, { recursive: true });
+	const stamp = timestamp();
+	const outputs = [
+		["lineage-full", lineageSvgHtml(graph, "lineage-full", stamp)],
+		["lineage-focused", lineageSvgHtml(graph, "lineage-focused", stamp)],
+		["timeline-projects", timelineHtml(graph, "timeline-projects", stamp)],
+		["timeline-sessions", timelineHtml(graph, "timeline-sessions", stamp)],
+	] as const;
+	const paths: string[] = [];
+	for (const [name, html] of outputs) {
+		const path = join(dir, `${stamp}-${name}.html`);
+		await writeFile(path, html, { encoding: "utf8", flag: "wx" });
+		paths.push(path);
+	}
+	return ["Session graphs", "", `Source: ${graph.source}`, `Records: ${graph.records.length}`, `Sessions: ${graph.nodes.size}`, "", "Wrote:", ...paths.map(shortPath)];
+}
+
 async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	const subcommand = argv[0] ?? "status";
 	const rest = argv.slice(1);
 	const flags = new Set(rest);
 	const inputPath = optionValue(rest, "--input");
-	const outputPath = optionValue(rest, "--output");
-	const refreshLines = flags.has("--refresh") ? await refreshStoreExport() : [];
 	const graph = await buildGraph(inputPath);
 	const current = process.env.PI_SESSION_FILE;
-	const filters = parseGraphFilters(rest);
-	const outputRoot = desktopOutputRoot();
-	const withRefresh = (lines: string[]) => [...refreshLines, ...(refreshLines.length ? [""] : []), ...lines].join("\n");
 	if (subcommand === "status") return statusLines(graph, current, cwd).join("\n");
+	if (subcommand === "lineage") return lineageLines(graph, current, flags.has("--files")).join("\n");
 	if (subcommand === "leaves") return leavesLines(graph, current, flags.has("--all")).join("\n");
 	if (subcommand === "repos") return reposLines(graph).join("\n");
-	if (subcommand === "lineage") return htmlWriteLines(outputRoot, filterGraph(graph, filters)).then(withRefresh);
-	if (subcommand === "timeline") return temporalWriteLines(outputRoot, graph, outputPath).then(withRefresh);
-	if (subcommand === "lineage-mermaid") {
-		const scoped = flags.has("--all") ? graph : graph;
-		const filtered = filterGraph(scoped, filters);
-		return graphWriteLines(outputRoot, filtered, current, flags.has("--all"), filters).then(withRefresh);
-	}
-	return "Usage: pigraph [status|leaves|repos|lineage|lineage-mermaid|timeline] [--refresh] [--all] [--input path] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b] [--repo text]";
+	if (subcommand === "graphs") return (await sessionGraphsWriteLines(graph)).join("\n");
+	return "Usage: pigraph [status|lineage|leaves|repos|graphs] [--files] [--all] [--input path]";
 }
 
 export default function (pi: ExtensionAPI) {
@@ -945,35 +1037,13 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("session-graph", {
-		description: "Session graph namespace: status, leaves, repos, lineage, lineage-mermaid, or timeline.",
-		handler: async (args, ctx) => {
-			const parsed = parseArgs(args);
-			const subcommand = parsed[0]?.startsWith("-") ? "lineage" : parsed[0] ?? "lineage";
-			const rest = subcommand === "lineage" && parsed[0]?.startsWith("-") ? parsed : parsed.slice(1);
-			const flags = new Set(rest);
-			let refreshLines: string[] = [];
-			if (flags.has("--refresh")) {
-				ctx.ui.setStatus("session-graph", "refreshing store export");
-				refreshLines = await refreshStoreExport();
-				ctx.ui.setStatus("session-graph", "refresh complete");
-			}
-			const full = await buildGraph();
-			const current = currentSession(ctx);
-			const filters = parseGraphFilters(rest);
-			const outputRoot = desktopOutputRoot();
-			const notify = (lines: string[]) => ctx.ui.notify([...refreshLines, ...(refreshLines.length ? [""] : []), ...lines].join("\n"), "info");
-			if (subcommand === "status") return ctx.ui.notify(statusLines(full, current, ctx.cwd).join("\n"), "info");
-			if (subcommand === "leaves") return ctx.ui.notify(leavesLines(full, current, flags.has("--all")).join("\n"), "info");
-			if (subcommand === "repos") return ctx.ui.notify(reposLines(full).join("\n"), "info");
-			if (subcommand === "lineage") return notify(await htmlWriteLines(outputRoot, filterGraph(full, filters)));
-			if (subcommand === "timeline") return notify(await temporalWriteLines(outputRoot, full, optionValue(rest, "--output")));
-			if (subcommand !== "lineage-mermaid") {
-				return ctx.ui.notify("Usage: /session-graph [status|leaves|repos|lineage|lineage-mermaid|timeline] [--refresh] [--all] [--output path] [--min-confidence <level>] [--provider a,b] [--edge-type a,b] [--operation-type a,b] [--tool a,b]", "warning");
-			}
-			const scoped = flags.has("--all") ? full : componentGraph(full, current);
-			const graph = filterGraph(scoped, filters);
-			return notify(await graphWriteLines(outputRoot, graph, current, flags.has("--all"), filters));
+	pi.registerCommand("session-graphs", {
+		description: "Generate timestamped session graph HTML files on the Desktop.",
+		handler: async (_args, ctx) => {
+			ctx.ui.setStatus("session-graphs", "building graph files");
+			const lines = await sessionGraphsWriteLines(await buildGraph());
+			ctx.ui.setStatus("session-graphs", "wrote graph files");
+			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});
 }

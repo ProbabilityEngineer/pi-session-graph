@@ -1,60 +1,69 @@
 # pi-session-graph
 
-Lightweight Pi extension for viewing prepared session lineage, logical thread, classification, and repo identity data.
+Lightweight Pi extension for text session status/lineage and generated session graph artifacts.
 
-`pi-session-graph` does not mutate raw session JSONLs and does not run heavy reconstruction. Heavy imports/reports live in `agent-session-store`.
+`pi-session-graph` does not mutate raw session JSONLs or manifests. Canonical imports/rebuilds live in `agent-session-store`; this package reads prepared exports and renders views.
 
 ## Commands
 
-```text
-/session-graph status
-/session-graph lineage [--refresh]
-/session-graph lineage-mermaid [--refresh] [--all] [--min-confidence <level>] [--provider pi,codex] [--edge-type relocation]
-/session-graph timeline [--refresh] [--output path]
-/session-graph status
-/session-graph leaves [--all]
-/session-graph repos
-```
-
-Compatibility aliases remain available:
+Text/current-session commands:
 
 ```text
 /session-status
 /session-lineage [--files]
-/session-leaves [--all]
-/session-repos
 ```
 
-A CLI entrypoint is also exposed for non-chat graph/status use:
+Graph artifact generation:
+
+```text
+/session-graphs
+```
+
+CLI equivalents:
 
 ```bash
 pigraph status
-pigraph lineage --refresh
-pigraph lineage-mermaid --refresh --operation-type repo_move --tool pi-repo-move
-pigraph timeline --refresh [--input ~/.pi/agent/session-store/graph-export.json] [--output temporal.html]
+pigraph lineage [--files]
+pigraph graphs
 ```
 
+`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write a fresh timestamped set of graph files. There is no `--refresh` flag.
 
-## Pi session suite relationship
+The singular `/session-graph ...` command is no longer part of the public command surface.
 
-`pi-session-graph` is the read-only graph/viewer layer in the Pi session tooling suite.
+## Graph outputs
 
-- `agent-session-store`: provider-neutral canonical store and graph export builder.
-- `pi-session-store`: planned Pi-facing wrapper around store workflows.
-- `pi-session-move`: session-facing move and restart UX.
-- `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
-- `pi-session-graph`: extension + CLI/static viewer over prepared exports.
-
-The preferred slash-command style is namespaced/focused to reduce command clutter:
+Graph files are written to:
 
 ```text
-/session-store ...
-/session-graph ...
-/move ...
-/repo-move ...
+~/Desktop/session-graphs/
 ```
 
-Existing top-level graph commands remain compatibility aliases for now.
+Each run writes timestamp-prefixed HTML files and does not overwrite previous runs:
+
+| File suffix | Old report | What it shows | Best for |
+|---|---|---|---|
+| `lineage-full.html` | `temporal-lineage.html` | All known session graph nodes with available edges/significant starts. Rendered as HTML/SVG, not Mermaid. | Global overview |
+| `lineage-focused.html` | `temporal-lineage-focused.html` | Sessions that participate in at least one relocation/session-move/repo-move/overlay edge. Rendered as HTML/SVG, not Mermaid. | Continuity debugging |
+| `timeline-projects.html` | `temporal-timeline.html` | Timeline grouped by project/folder label. | Project/cwd movement over time |
+| `timeline-sessions.html` | `temporal-timeline-sessions.html` | Timeline grouped by individual session file. | Session-file movement over time |
+
+Example filenames:
+
+```text
+2026-06-02T12-34-56-789Z-lineage-full.html
+2026-06-02T12-34-56-789Z-lineage-focused.html
+2026-06-02T12-34-56-789Z-timeline-projects.html
+2026-06-02T12-34-56-789Z-timeline-sessions.html
+```
+
+Page titles include the same timestamp and graph type, for example:
+
+```text
+2026-06-02T12-34-56-789Z — Lineage Full
+```
+
+Mermaid is not used for the primary lineage graph rendering because large session graphs exceed Mermaid renderer size limits.
 
 ## Data sources
 
@@ -68,13 +77,6 @@ Legacy store input:
 
 ```text
 ~/.pi/agent/session-graph/curated-store.json
-```
-
-This JSON is produced by `agent-session-store` via:
-
-```bash
-npm run build-store
-npm run export-graph
 ```
 
 `agent-session-store` merges legacy and namespaced session-move manifests before graph export:
@@ -91,37 +93,13 @@ Fallback inputs, used only when the prepared graph export is unavailable:
 ~/.pi/agent/session-graph/lineage-overlays.jsonl
 ```
 
-`pi-session-graph` should normally read the prepared store export rather than parsing raw session-move manifests directly.
+## Pi session suite relationship
 
-## What it displays
-
-- session nodes and relocation/overlay/compaction edges
-- current lineage, leaves, roots, and fork points
-- classifications/display labels from the canonical store
-- logical thread counts and membership-derived summaries
-- repo identity/event records when exported by `agent-session-store`
-- canonical temporal activity spans, work bursts, activity metrics, and compaction metadata
-
-Repo identity is read-only here. Stable repo/project identity, swap/rename/fork/archive events, and time-use reports are curated in `agent-session-store` and exported for display.
-
-## Artifacts
-
-`/session-graph lineage`, `/session-graph lineage-mermaid`, and `/session-graph timeline` write timestamped files under the user's Desktop:
-
-```text
-~/Desktop/session-graph/session_graph_viewer_<timestamp>.html
-~/Desktop/session-graph/session_graph_<timestamp>.md
-~/Desktop/session-graph/graph_<timestamp>.mmd
-~/Desktop/session-graph/temporal_graph_<timestamp>.html
-```
-
-Use `--refresh` to run `agent-session-store` rebuild/export before rendering:
-
-```text
-/session-graph lineage --refresh
-/session-graph lineage-mermaid --refresh
-/session-graph timeline --refresh
-```
+- `agent-session-store`: provider-neutral canonical store and graph export builder.
+- `pi-session-store`: Pi-facing wrapper around store workflows.
+- `pi-session-move`: session-facing move and restart UX.
+- `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
+- `pi-session-graph`: read-only text status/lineage and graph artifact rendering.
 
 ## Install
 
@@ -139,61 +117,9 @@ pi -e ./index.ts
 
 `agent-session-store` / `pi-session-store` owns provider imports, canonical SQLite/JSON exports, lineage/continuity/compaction/fork derivation, repo identity and alias facts, temporal work bursts, and provider/activity metrics.
 
-`pi-session-graph` owns read-only rendering/navigation: Pi current-session commands, CLI/static HTML generation, Mermaid graph output, temporal viewers, filters, search, grouping, legends, and detail panels over prepared exports.
+`pi-session-graph` owns read-only rendering/navigation over prepared exports.
 
 - Does not mutate session JSONLs.
 - Does not rewrite legacy `~/.pi/agent/relocations.jsonl` or namespaced `~/.pi/agent/session-move/manifests/relocations.jsonl`.
 - Does not infer repo identity from raw content.
-- Does not compute temporal/activity metrics from raw sessions.
 - Does not perform backup extraction/reconstruction.
-
-Use `agent-session-store` for canonical store rebuilds, repo identity curation, bucket reconciliation, graph exports, and reports.
-
-## Lineage viewer
-
-```bash
-pigraph lineage
-pigraph lineage --refresh
-```
-
-Or inside Pi:
-
-```text
-/session-graph lineage
-/session-graph lineage --refresh
-```
-
-The lineage viewer reads prepared graph data, supports search and confidence/provider/edge-type/operation/tool filters, shows compaction counts in node details, and writes `~/Desktop/session-graph/session_graph_viewer_<timestamp>.html`.
-
-## Lineage Mermaid export
-
-```bash
-pigraph lineage-mermaid
-pigraph lineage-mermaid --refresh --operation-type repo_move --tool pi-repo-move
-```
-
-Or inside Pi:
-
-```text
-/session-graph lineage-mermaid
-/session-graph lineage-mermaid --refresh
-```
-
-The Mermaid export writes `~/Desktop/session-graph/session_graph_<timestamp>.md` and `~/Desktop/session-graph/graph_<timestamp>.mmd`.
-
-## Timeline viewer
-
-```bash
-pigraph timeline
-pigraph timeline --refresh
-pigraph timeline --input ~/.pi/agent/session-store/graph-export.json --output ~/Desktop/session-graph/timeline.html
-```
-
-Or inside Pi:
-
-```text
-/session-graph timeline
-/session-graph timeline --refresh
-```
-
-The timeline viewer renders prepared `graph-export.json` records: `temporalActivitySpans`, `workBursts`, `activityMetrics`, and `compactionEvents`. It can group by project/cwd lane, provider, or session; the sticky legend explains wall-clock spans vs accrued activity metrics and compaction/checkpoint badges. By default it writes `~/Desktop/session-graph/temporal_graph_<timestamp>.html`.
