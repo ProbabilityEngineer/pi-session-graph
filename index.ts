@@ -331,6 +331,7 @@ function graphLegend() {
 		"- `-->` explicit/authoritative continuation edge",
 		"- `-.->` inferred, derived, overlay, or lower-confidence edge",
 		"- `★` current session, when known",
+		"- Mermaid subgraphs are lane/row delimiters grouped by cwd/repo label",
 		"- edge label format: `date / edge type or classification / confidence`",
 		"- confidence values include `authoritative`, `high`, `medium`, `low`, and source-specific values such as `filename-and-session-bucket`",
 		"- `same_cwd_temporal`: low-confidence cross-provider continuity from same cwd and adjacent time order",
@@ -341,11 +342,31 @@ function graphLegend() {
 	].join("\n");
 }
 
+function mermaidLabel(value: string) {
+	return value.replace(/\\/g, "\\\\").replace(/"/g, "&quot;").replace(/\r?\n/g, " ");
+}
+
+function laneKey(node: SessionNode) {
+	return node.label || cwdLabel(node.cwd) || "unknown";
+}
+
 function mermaid(graph: Graph, current?: string) {
 	const lines = ["graph TD"];
+	const lanes = new Map<string, SessionNode[]>();
 	for (const node of graph.nodes.values()) {
-		const currentMark = node.path === current ? " ★" : "";
-		lines.push(`  ${node.id}["${node.label}${currentMark}<br/>${node.id}"]`);
+		const key = laneKey(node);
+		const list = lanes.get(key) ?? [];
+		list.push(node);
+		lanes.set(key, list);
+	}
+	const sortedLanes = [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b));
+	for (const [index, [label, nodes]] of sortedLanes.entries()) {
+		lines.push(`  subgraph LANE_${index}["${mermaidLabel(label)}"]`, "    direction TB");
+		for (const node of nodes.sort((a, b) => a.id.localeCompare(b.id))) {
+			const currentMark = node.path === current ? " ★" : "";
+			lines.push(`    ${node.id}["${mermaidLabel(node.label)}${currentMark}<br/>${node.id}"]`);
+		}
+		lines.push("  end");
 	}
 	for (const record of graph.records) {
 		const from = graph.nodes.get(record.sourceSession);
@@ -353,9 +374,9 @@ function mermaid(graph: Graph, current?: string) {
 		if (!from || !to) continue;
 		const style = record.inferred ? "-.->" : "-->";
 		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
-		lines.push(`  ${from.id} ${style}|${edgeLabel}| ${to.id}`);
+		lines.push(`  ${from.id} ${style}|${mermaidLabel(edgeLabel)}| ${to.id}`);
 	}
-	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
+	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LANES[lane boxes group cwd/repo rows]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
 	return lines.join("\n");
 }
 
