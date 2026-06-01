@@ -9,6 +9,7 @@ const CURATED_STORE = "session-graph/curated-store.json";
 const GRAPH_EXPORT = "session-store/graph-export.json";
 
 type RelocationRecord = {
+	id?: string;
 	ts: string;
 	fromCwd: string;
 	toCwd: string;
@@ -18,10 +19,15 @@ type RelocationRecord = {
 	replacements?: number | null;
 	inferred?: boolean;
 	confidence?: string;
+	provenance?: string;
+	status?: string;
+	scope?: string;
 	lineageKind?: string;
 	displayLabel?: string;
 	edgeType?: string;
 	overlay?: boolean;
+	evidence?: unknown;
+	metadata?: Record<string, unknown>;
 };
 
 type OverlayRecord =
@@ -30,9 +36,13 @@ type OverlayRecord =
 	| { kind: "alias"; path: string; label: string; note?: string }
 	| { kind: "classification"; manifestIndex: number; lineageKind?: string; recordConfidence?: string; continuationConfidence?: string };
 
+type GenericNode = { id: string; type?: string; kind?: string; label?: string; title?: string; status?: string; confidence?: string; provenance?: string; provider?: string; scope?: string; created_at?: string; createdAt?: string; timestamp?: string; metadata?: Record<string, unknown>; evidence?: unknown };
+type GenericEdge = { id?: string; type?: string; kind?: string; from?: string; to?: string; source?: string; target?: string; from_id?: string; to_id?: string; sourceId?: string; targetId?: string; status?: string; confidence?: string; provenance?: string; scope?: string; created_at?: string; createdAt?: string; timestamp?: string; metadata?: Record<string, unknown>; evidence?: unknown };
+
 type StoreExport = {
+	nodes?: GenericNode[];
 	sessions?: { id: string; canonicalKey: string; provider?: string; providerSessionId?: string; startTimestamp?: string; endTimestamp?: string; lineCount?: number; byteCount?: number; metadata?: { cwd?: string; displayName?: string; provider?: string } }[];
-	edges?: { id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } }[];
+	edges?: ({ id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; metadata?: { fromCwd?: string; toCwd?: string; manifestIndex?: number } } | GenericEdge)[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
 	logicalThreads?: { id: string; label?: string; metadata?: Record<string, unknown> }[];
@@ -52,6 +62,14 @@ type SessionNode = {
 	cwd: string;
 	label: string;
 	provider?: string;
+	type?: string;
+	status?: string;
+	confidence?: string;
+	provenance?: string;
+	scope?: string;
+	timestamp?: string;
+	evidence?: unknown;
+	metadata?: Record<string, unknown>;
 	compactionCount?: number;
 };
 
@@ -156,17 +174,18 @@ async function readOverlays(): Promise<OverlayRecord[]> {
 	return readJsonl<OverlayRecord>(overlayFile());
 }
 
-function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>(), provider?: string, compactionCount?: number) {
+function addNode(nodes: Map<string, SessionNode>, path: string, cwd: string, aliases = new Map<string, string>(), provider?: string, compactionCount?: number, extra: Partial<SessionNode> = {}) {
 	if (!path || path.startsWith("(")) return;
 	if (!nodes.has(path)) {
 		const base = cwdLabel(cwd);
 		const alias = aliases.get(cwd);
-		const label = alias && alias !== base ? `${base} (${alias})` : base;
-		nodes.set(path, { id: sessionId(path), path, cwd, label, provider, compactionCount });
+		const label = extra.label ?? (alias && alias !== base ? `${base} (${alias})` : base);
+		nodes.set(path, { id: extra.id ?? sessionId(path), path, cwd, label, provider, compactionCount, ...extra });
 	} else {
 		const node = nodes.get(path)!;
 		if (provider) node.provider = provider;
 		if (compactionCount != null) node.compactionCount = (node.compactionCount ?? 0) + compactionCount;
+		Object.assign(node, Object.fromEntries(Object.entries(extra).filter(([, value]) => value != null)));
 	}
 }
 
@@ -204,9 +223,34 @@ function graphFromRecords(records: RelocationRecord[], overlays: OverlayRecord[]
 	return { records, nodes, children, byDestination, overlays, aliases, source, logicalThreads, repoIdentities };
 }
 
+function edgeEndpoint(edge: GenericEdge, side: "from" | "to") {
+	return side === "from" ? edge.from ?? edge.source ?? edge.from_id ?? edge.sourceId : edge.to ?? edge.target ?? edge.to_id ?? edge.targetId;
+}
+
+function buildGenericGraph(store: StoreExport): Graph | undefined {
+	const genericNodes = store.nodes ?? [];
+	const genericEdges = (store.edges ?? []).filter((edge): edge is GenericEdge => !("sourceSessionId" in edge) && edgeEndpoint(edge, "from") != null && edgeEndpoint(edge, "to") != null);
+	if (!genericNodes.length && !genericEdges.length) return undefined;
+	const nodes = new Map<string, SessionNode>();
+	for (const node of genericNodes) addNode(nodes, node.id, String(node.metadata?.cwd ?? node.type ?? node.kind ?? "generic"), new Map(), node.provider, undefined, { id: node.id, type: node.type ?? node.kind, label: node.label ?? node.title ?? node.id, status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp ?? node.created_at ?? node.createdAt, evidence: node.evidence, metadata: node.metadata });
+	const records: RelocationRecord[] = [];
+	for (const edge of genericEdges) {
+		const from = edgeEndpoint(edge, "from")!;
+		const to = edgeEndpoint(edge, "to")!;
+		addNode(nodes, from, "generic", new Map(), undefined, undefined, { id: from, label: from, type: "unknown" });
+		addNode(nodes, to, "generic", new Map(), undefined, undefined, { id: to, label: to, type: "unknown" });
+		records.push({ id: edge.id, ts: edge.timestamp ?? edge.created_at ?? edge.createdAt ?? "(generic)", fromCwd: from, toCwd: to, sourceSession: from, destinationSession: to, inferred: edge.provenance === "inferred" || edge.provenance === "derived", confidence: edge.confidence, provenance: edge.provenance, status: edge.status, scope: edge.scope, edgeType: edge.type ?? edge.kind ?? "related_to", displayLabel: edge.type ?? edge.kind, evidence: edge.evidence, metadata: edge.metadata });
+	}
+	const graph = graphFromRecords(records, [], new Map(), "store");
+	graph.nodes = nodes;
+	return graph;
+}
+
 function buildStoreGraph(store: StoreExport): Graph | undefined {
+	const genericGraph = buildGenericGraph(store);
+	if (genericGraph && !(store.sessions ?? []).length) return genericGraph;
 	const sessionsById = new Map((store.sessions ?? []).map((session) => [session.id, session]));
-	if (!sessionsById.size || !(store.edges ?? []).length) return undefined;
+	if (!sessionsById.size || !(store.edges ?? []).length) return genericGraph;
 	const labelByTarget = new Map<string, string>();
 	for (const label of store.labels ?? []) {
 		if (label.targetType !== "session") continue;
@@ -251,6 +295,7 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		});
 	}
 	for (const edge of store.edges ?? []) {
+		if (!("sourceSessionId" in edge)) continue;
 		const source = sessionsById.get(edge.sourceSessionId);
 		const target = sessionsById.get(edge.targetSessionId);
 		if (!source || !target) continue;
@@ -266,7 +311,9 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 			lineageKind: classification?.classification,
 			displayLabel: classification?.metadata?.displayLabel,
 			edgeType: edge.edgeType,
+			provenance: edge.provenance,
 			overlay: edge.provenance !== "pi-relocate-manifest",
+			metadata: edge.metadata,
 		});
 	}
 	const graph = graphFromRecords(records, overlays, new Map(), "store", logicalThreads, repoIdentities);
@@ -413,6 +460,14 @@ function recordType(record: RelocationRecord) {
 	return record.edgeType ?? record.lineageKind ?? record.displayLabel ?? marker(record);
 }
 
+function edgeStyle(record: RelocationRecord) {
+	const type = recordType(record);
+	if (["contradicts", "contested"].includes(type) || record.status === "contested") return "-.->";
+	if (["supersedes", "obsolete"].includes(type) || record.status === "obsolete") return "==>";
+	if (record.edgeType === "compaction") return "==>";
+	return record.inferred ? "-.->" : "-->";
+}
+
 function recordPassesFilters(graph: Graph, record: RelocationRecord, filters: GraphFilters) {
 	if (filters.minConfidence) {
 		const threshold = confidenceRank.get(filters.minConfidence) ?? 0;
@@ -493,7 +548,7 @@ function mermaid(graph: Graph, current?: string) {
 		const from = graph.nodes.get(record.sourceSession);
 		const to = graph.nodes.get(record.destinationSession);
 		if (!from || !to) continue;
-		const style = record.edgeType === "compaction" ? "==>" : record.inferred ? "-.->" : "-->";
+		const style = edgeStyle(record);
 		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
 		lines.push(`  ${from.id} ${style}|${mermaidLabel(edgeLabel)}| ${to.id}`);
 	}
@@ -507,26 +562,29 @@ function timestamp() {
 
 function graphExportData(graph: Graph) {
 	return {
-		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider, compactionCount: node.compactionCount ?? 0 })),
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0 })),
 		edges: graph.records.flatMap((record, index) => {
 			const from = graph.nodes.get(record.sourceSession);
 			const to = graph.nodes.get(record.destinationSession);
 			if (!from || !to) return [];
 			return [{
-				id: `edge_${index + 1}`,
+				id: record.id ?? `edge_${index + 1}`,
 				from: from.id,
 				to: to.id,
 				sourceSession: record.sourceSession,
 				destinationSession: record.destinationSession,
 				type: recordType(record),
+				status: record.status,
+				scope: record.scope,
 				confidence: record.confidence ?? "unknown",
 				provider: from.provider || to.provider || "unknown",
 				timestamp: record.ts,
 				label: [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / "),
 				inferred: record.inferred,
 				overlay: record.overlay,
-				provenance: record.overlay ? "overlay" : record.inferred ? "derived" : "authoritative/runtime",
-				metadata: { fromCwd: record.fromCwd, toCwd: record.toCwd, lineageKind: record.lineageKind, displayLabel: record.displayLabel, edgeType: record.edgeType },
+				provenance: record.provenance ?? (record.overlay ? "overlay" : record.inferred ? "derived" : "authoritative/runtime"),
+				evidence: record.evidence,
+				metadata: { fromCwd: record.fromCwd, toCwd: record.toCwd, lineageKind: record.lineageKind, displayLabel: record.displayLabel, edgeType: record.edgeType, ...(record.metadata ?? {}) },
 			}];
 		}),
 	};
@@ -551,7 +609,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8d
 <input id="search" placeholder="search title/cwd/session/provider" size="34" />
 <select id="confidence"><option value="">all confidence</option><option>authoritative</option><option>high</option><option>medium</option><option>low</option><option>unknown</option></select>
 <select id="provider"><option value="">all providers</option></select>
+<select id="nodeType"><option value="">all node types</option></select>
 <select id="edgeType"><option value="">all edge types</option></select>
+<select id="provenance"><option value="">all provenance</option></select>
+<select id="status"><option value="">all status</option></select>
+<label><input type="checkbox" id="hasEvidence" /> has evidence</label>
+<label><input type="checkbox" id="relations" /> contradictions/supersessions</label>
 <span class="muted" id="counts"></span>
 </header>
 <main><section id="graph"></section><aside><h2>Details</h2><div class="actions"><button id="hop1">1-hop</button><button id="hop2">2-hop</button><button id="resetView">reset</button><button id="exportSubgraph">export JSON</button><button id="exportMermaid">export Mermaid</button></div><div id="details" class="code">Select a node or edge.</div></aside></main>
@@ -559,14 +622,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8d
 const $=id=>document.getElementById(id); const graph=$('graph'), details=$('details');let selected=null,focus=null;
 function uniq(xs){return [...new Set(xs.filter(Boolean))].sort()}function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 for(const p of uniq(DATA.nodes.map(n=>n.provider).concat(DATA.edges.map(e=>e.provider)))) $('provider').append(new Option(p,p));
+for(const t of uniq(DATA.nodes.map(n=>n.type))) $('nodeType').append(new Option(t,t));
 for(const t of uniq(DATA.edges.map(e=>e.type))) $('edgeType').append(new Option(t,t));
+for(const p of uniq(DATA.nodes.map(n=>n.provenance).concat(DATA.edges.map(e=>e.provenance)))) $('provenance').append(new Option(p,p));
+for(const s of uniq(DATA.nodes.map(n=>n.status).concat(DATA.edges.map(e=>e.status)))) $('status').append(new Option(s,s));
 function matchText(obj,q){return !q || JSON.stringify(obj).toLowerCase().includes(q)}
 function neighborhood(id,hops){let ids=new Set([id]);for(let i=0;i<hops;i++)for(const e of DATA.edges)if(ids.has(e.from)||ids.has(e.to)){ids.add(e.from);ids.add(e.to)}return ids}
-function currentData(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, t=$('edgeType').value;let edges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&matchText(e,q));let ids=new Set(edges.flatMap(e=>[e.from,e.to]));let nodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!q||matchText(n,q)||ids.has(n.id)));if(focus){nodes=nodes.filter(n=>focus.has(n.id));const keep=new Set(nodes.map(n=>n.id));edges=edges.filter(e=>keep.has(e.from)&&keep.has(e.to))}return {nodes,edges}}
+function isRelation(e){return ['contradicts','supersedes','obsolete','contested'].includes(e.type)||['obsolete','contested'].includes(e.status)}
+function hasEv(x){return x.evidence||(x.metadata&&x.metadata.evidence)}
+function currentData(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, nt=$('nodeType').value, t=$('edgeType').value, prov=$('provenance').value, st=$('status').value, ev=$('hasEvidence').checked, rel=$('relations').checked;let edges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&(!prov||e.provenance===prov)&&(!st||e.status===st)&&(!ev||hasEv(e))&&(!rel||isRelation(e))&&matchText(e,q));let ids=new Set(edges.flatMap(e=>[e.from,e.to]));let nodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!nt||n.type===nt)&&(!prov||n.provenance===prov)&&(!st||n.status===st)&&(!ev||hasEv(n))&&(!q||matchText(n,q)||ids.has(n.id)));if(focus){nodes=nodes.filter(n=>focus.has(n.id));const keep=new Set(nodes.map(n=>n.id));edges=edges.filter(e=>keep.has(e.from)&&keep.has(e.to))}return {nodes,edges}}
 function show(kind,obj){selected={kind,...obj};const rows=[['kind',kind],['id',obj.id],['type',obj.type],['label',obj.label],['confidence',obj.confidence],['provenance',obj.provenance],['timestamp',obj.timestamp],['provider',obj.provider],['path',obj.path],['source',obj.sourceSession],['destination',obj.destinationSession]].filter(([,v])=>v!=null&&v!=='').map(([k,v])=>'<div class="field"><b>'+esc(k)+':</b> '+esc(v)+'</div>').join('');details.innerHTML=rows+'<h3>Metadata / evidence</h3><pre class="code">'+esc(JSON.stringify(obj.metadata??obj,null,2))+'</pre>';render()}
 function render(){const {nodes,edges}=currentData();graph.innerHTML='';for(const lane of uniq(nodes.map(n=>n.label))){const box=document.createElement('div');box.className='lane';box.innerHTML='<h3>'+esc(lane)+'</h3>';for(const n of nodes.filter(n=>n.label===lane)){const el=document.createElement('button');el.className='node '+(selected?.id===n.id?'selected':'');el.textContent=n.label+' · '+n.id+(n.compactionCount?' · compact x'+n.compactionCount:'');el.onclick=()=>show('node',n);box.append(el)}graph.append(box)}const edgeBox=document.createElement('div');edgeBox.className='lane';edgeBox.innerHTML='<h3>Edges</h3>';for(const e of edges){const el=document.createElement('div');el.className='edge '+e.confidence+(selected?.id===e.id?' selected':'');el.textContent=e.label+' · '+e.from+' → '+e.to;el.onclick=()=>show('edge',e);edgeBox.append(el)}graph.append(edgeBox);$('counts').textContent=nodes.length+' nodes, '+edges.length+' edges'+(focus?' · focused':'')}
 $('hop1').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,1);render()}};$('hop2').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,2);render()}};$('resetView').onclick=()=>{focus=null;render()};$('exportSubgraph').onclick=()=>{details.textContent=JSON.stringify(currentData(),null,2)};$('exportMermaid').onclick=()=>{const {nodes,edges}=currentData(),ids=new Map(nodes.map(n=>[n.id,n]));details.textContent=['graph TD',...nodes.map(n=>'  '+n.id+'["'+n.label.replace(/"/g,'&quot;')+'"]'),...edges.filter(e=>ids.has(e.from)&&ids.has(e.to)).map(e=>'  '+e.from+' -->|'+e.type+'| '+e.to)].join('\n')};
-for(const id of ['search','confidence','provider','edgeType']) $(id).addEventListener('input',render); render();</script>
+for(const id of ['search','confidence','provider','nodeType','edgeType','provenance','status','hasEvidence','relations']) $(id).addEventListener('input',render); render();</script>
 </body></html>`;
 	const htmlPath = join(dir, `session_graph_viewer_${stamp}.html`);
 	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });

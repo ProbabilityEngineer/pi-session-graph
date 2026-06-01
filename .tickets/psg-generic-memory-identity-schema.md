@@ -1,6 +1,6 @@
 ---
 id: psg-generic-memory-identity-schema
-status: open
+status: closed
 deps: [psg-html-graph-viewer]
 links:
   - ../../research/agent-memory-identity/docs/graph-architecture.md
@@ -21,3 +21,8 @@ Extend the viewer/data model so it can render graph records beyond session nodes
 - Node and edge type filters work for generic records.
 - Unknown node/edge types render with safe default labels/styles.
 - Link to evidence records or evidence references when present.
+
+
+## Closure
+
+Added generic node/edge input support for graph exports with `nodes` and generic `edges`, preserving session graph compatibility. Generic records support type/kind, status, confidence, provenance, scope, timestamps, metadata, and evidence references. HTML viewer now filters by node type, edge type, provenance, status, and evidence presence, with safe defaults for unknown node/edge types.

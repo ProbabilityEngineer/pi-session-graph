@@ -1,6 +1,6 @@
 ---
 id: psg-contradiction-supersession-paths
-status: open
+status: closed
 deps: [psg-generic-memory-identity-schema]
 links:
   - ../../research/agent-memory-identity/docs/graph-architecture.md
@@ -19,3 +19,8 @@ Memory/identity graphs need to show when claims, preferences, or memory records 
 - Style contradiction/supersession edges distinctly.
 - Provide filter/toggle for contradiction and supersession paths.
 - Detail panel explains current vs obsolete/contested records when metadata is present.
+
+
+## Closure
+
+Added recognition and filtering for `contradicts`, `supersedes`, `obsolete`, and `contested` relations/statuses. Mermaid/HTML exports carry status/provenance/metadata, relation filters isolate contradiction/supersession paths, and detail panels expose current vs obsolete/contested metadata where present.
