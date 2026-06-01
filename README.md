@@ -31,6 +31,28 @@ pi-session-graph mermaid --all
 pi-session-graph html
 ```
 
+
+## Pi session suite relationship
+
+`pi-session-graph` is the read-only graph/viewer layer in the Pi session tooling suite.
+
+- `agent-session-store`: provider-neutral canonical store and graph export builder.
+- `pi-session-store`: planned Pi-facing wrapper around store workflows.
+- `pi-session-relocate`: planned/session-facing relocation and restart UX.
+- `pi-session-repo-move`: planned filesystem repo move UX.
+- `pi-session-graph`: extension + CLI/static viewer over prepared exports.
+
+The preferred future slash-command style is namespaced to reduce command clutter:
+
+```text
+/session-store ...
+/session-graph ...
+/session-relocate ...
+/session-repo ...
+```
+
+Existing top-level graph commands remain compatibility aliases for now.
+
 ## Data sources
 
 Preferred input:

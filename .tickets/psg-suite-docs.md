@@ -1,6 +1,6 @@
 ---
 id: psg-suite-docs
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-31T15:10:00Z
@@ -30,3 +30,8 @@ Prefer a compact namespaced command surface:
 ```
 
 Existing top-level commands may remain as compatibility aliases, but docs should steer users toward the namespace to reduce slash-command clutter.
+
+
+## Closure
+
+README now documents the Pi session suite relationship, store/graph boundary, planned wrapper packages, and namespaced slash-command direction while preserving compatibility aliases.
