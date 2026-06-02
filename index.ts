@@ -832,7 +832,7 @@ function statusLines(graph: Graph, current: string | undefined, cwd = process.cw
 		`Generation/depth: ${lineage.length}`,
 		`Leaf: ${leaf ? "yes" : "no"}`,
 		`Lineage split/forks: ${lineageForks.length}`,
-		...(lineageForks.length && node?.pinnedLineageName ? [`Branch naming: forked lineage; use /move-lineage --name <new-branch-name> if this branch is separate work`] : []),
+		...(lineageForks.length && node?.pinnedLineageName ? [`Branch naming: forked lineage; use /lineage-name <new-branch-name> if this branch is separate work`] : []),
 		`Source: ${graph.source}`,
 		`Records: ${graph.records.length}`,
 		`Overlay records: ${graph.overlays.length}`,
@@ -1061,19 +1061,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("session-leaves", {
-		description: "Show graph leaves for the current component. Use --all for all known leaves.",
-		handler: async (args, ctx) => {
-			ctx.ui.notify(leavesLines(await buildGraph(), currentSession(ctx), parseFlags(args).has("--all")).join("\n"), "info");
-		},
-	});
-
-	pi.registerCommand("session-repos", {
-		description: "Show repo identity records from the canonical store export.",
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(reposLines(await buildGraph()).join("\n"), "info");
-		},
-	});
 
 	pi.registerCommand("session-graphs", {
 		description: "Generate timestamped session graph HTML files on the Desktop.",

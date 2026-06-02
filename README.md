@@ -19,11 +19,13 @@ Graph artifact generation:
 /session-graphs
 ```
 
-CLI equivalents:
+CLI/admin equivalents:
 
 ```bash
 pigraph status
 pigraph lineage [--files]
+pigraph leaves [--all]
+pigraph repos
 pigraph graphs
 npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 ```
