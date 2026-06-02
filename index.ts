@@ -132,14 +132,16 @@ function agentSessionStoreRoot() {
 	return resolve(process.env.AGENT_SESSION_STORE_REPO ?? join(process.env.HOME ?? ".", "git", "agents", "agent-session-store"));
 }
 
+async function runAgentSessionStore(script: "build-store" | "export-graph" | "build-graphs") {
+	const cwd = agentSessionStoreRoot();
+	const { stdout, stderr } = await execFileAsync("npm", ["run", script], { cwd, env: process.env });
+	return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+}
+
 async function refreshStoreExport(): Promise<string[]> {
 	const cwd = agentSessionStoreRoot();
-	const run = async (script: "build-store" | "export-graph") => {
-		const { stdout, stderr } = await execFileAsync("npm", ["run", script], { cwd, env: process.env });
-		return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
-	};
-	const build = await run("build-store");
-	const exportGraph = await run("export-graph");
+	const build = await runAgentSessionStore("build-store");
+	const exportGraph = await runAgentSessionStore("export-graph");
 	return [
 		"Refreshed graph export",
 		`Core repo: ${shortPath(cwd)}`,
@@ -983,23 +985,19 @@ function htmlShell(title: string, body: string) {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:2rem;line-height:1.4}.wrap{height:82vh;overflow:auto;border:1px solid #334155;border-radius:10px;background:#0f172a}svg{width:100%;height:100%}a{color:#93c5fd}ol{max-height:40vh;overflow:auto}.muted{color:#94a3b8}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>\n`;
 }
 
-async function sessionGraphsWriteLines(graph: Graph) {
+async function sessionGraphsWriteLines(_graph: Graph) {
 	const refreshLines = await refreshStoreExport();
-	graph = await buildGraph();
-	const outputRoot = desktopOutputRoot();
-	const lineageLines = await htmlWriteLines(outputRoot, graph);
-	const temporalLines = await temporalWriteLines(outputRoot, graph);
-	const mermaidLines = await graphWriteLines(outputRoot, graph, undefined, true, {});
+	const buildGraphs = await runAgentSessionStore("build-graphs");
+	const outputDir = join(agentDir(), "session-graph");
+	const files = ["lineage-full.html", "lineage-focused.html", "timeline-projects.html", "timeline-sessions.html"];
 	return [
 		"Session graphs",
 		"",
 		...refreshLines,
+		...(buildGraphs ? ["", buildGraphs] : []),
 		"",
-		...lineageLines,
-		"",
-		...temporalLines,
-		"",
-		...mermaidLines,
+		"Wrote:",
+		...files.map((file) => shortPath(join(outputDir, file))),
 	];
 }
 

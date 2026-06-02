@@ -28,33 +28,26 @@ pigraph graphs
 npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 ```
 
-`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write the pre-existing graph viewer artifacts. There is no `--refresh` flag.
+`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then run `agent-session-store`'s `build-graphs` report generator. There is no `--refresh` flag.
 
 The singular `/session-graph ...` command is no longer part of the public command surface.
 
 ## Graph outputs
 
-Graph files are written to:
+Graph files are written by `agent-session-store` to:
 
 ```text
-~/Desktop/session-graph/
+~/.pi/agent/session-graph/
 ```
 
-`/session-graphs` writes the older viewer styles rather than the simplified four-file HTML/SVG prototype:
+`/session-graphs` writes the same names and page titles as the graph builder:
 
-| File pattern | What it shows |
+| File | What it shows |
 |---|---|
-| `session_graph_viewer_<timestamp>.html` | Interactive lineage/detail viewer over graph-export data. |
-| `temporal_graph_<timestamp>.html` | Canonical temporal activity viewer over graph-export temporal spans/bursts/metrics/compactions. |
-| `session_graph_<timestamp>.md` | Mermaid Markdown graph export. |
-| `graph_<timestamp>.mmd` | Raw Mermaid graph export. |
-
-For the clearer named reports (`lineage-full`, `lineage-focused`, `timeline-projects`, `timeline-sessions`), use `agent-session-store`:
-
-```bash
-cd /Users/sam/git/agents/agent-session-store
-npm run build-graphs
-```
+| `lineage-full.html` | Full temporal lineage graph: all visible lineage edges plus connected/significant standalone session starts. |
+| `lineage-focused.html` | Focused temporal lineage graph: sessions with one or more visible relocation/move/overlay edges; omits standalone starts. |
+| `timeline-projects.html` | Timeline grouped by project/folder label. |
+| `timeline-sessions.html` | Same timeline data grouped by individual session file. |
 
 For a rough recreation of the archived `whole-lineage-graph.html` / `.mmd` style, use:
 
