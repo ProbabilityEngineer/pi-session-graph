@@ -84,6 +84,7 @@ type SessionNode = {
 	evidence?: unknown;
 	metadata?: Record<string, unknown>;
 	compactionCount?: number;
+	lineCount?: number;
 };
 
 type LogicalThread = { id: string; label: string; members: { sessionPath: string; role?: string; ordinal?: number }[] };
@@ -410,6 +411,9 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		if (node) node.displayName = displayNameByTarget.get(session.id) ?? session.metadata?.displayName;
 		if (node) node.pinnedLineageName = pinnedLineageNameByTarget.get(session.id);
 		if (node) node.provider = session.provider ?? session.metadata?.provider;
+		if (node) node.timestamp = session.startTimestamp ?? node.timestamp;
+		if (node) node.lineCount = session.lineCount;
+		if (node) node.metadata = { ...(node.metadata ?? {}), lineCount: session.lineCount, byteCount: session.byteCount, startTimestamp: session.startTimestamp, endTimestamp: session.endTimestamp };
 	}
 	const compactionCounts = new Map<string, number>();
 	for (const compaction of store.compactionEvents ?? []) compactionCounts.set(compaction.sessionId, (compactionCounts.get(compaction.sessionId) ?? 0) + (compaction.eventCount ?? compaction.summaryEventCount ?? 1));
@@ -650,25 +654,48 @@ function dotGraph(graph: Graph, current?: string) {
 		lanes.set(key, list);
 	}
 	let cluster = 0;
+	const stateIds: string[] = [];
 	for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
 		lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(label)}";`, "    color=\"#334155\";", "    fontcolor=\"#cbd5e1\";", "    style=\"rounded\";");
-		for (const node of nodes.sort((a, b) => a.id.localeCompare(b.id))) {
+		for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
 			const currentMark = node.path === current ? " ★" : "";
-			const labelLines = [node.label + currentMark, node.provider, node.pinnedLineageName, node.id].filter(Boolean).join("\\n");
+			const labelLines = [node.label + currentMark, "session", node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider, node.pinnedLineageName].filter(Boolean).join("\\n");
 			const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
+			if (node.timestamp) {
+				const startId = `${dotId(node.id)}_start`;
+				lines.push(`    ${startId} [shape=circle, label="start\\n${dotEscape(node.timestamp.slice(0, 16))}", fillcolor="#312e81", color="#818cf8"];`);
+				lines.push(`    ${startId} -> ${dotId(node.id)} [label="", color="#818cf8"];`);
+			}
 			lines.push(`    ${dotId(node.id)} [label="${dotEscape(labelLines)}", tooltip="${dotEscape(node.path)}", fillcolor="${fill}"];`);
 		}
 		lines.push("  }");
 	}
+	const edgesBySource = new Map<string, RelocationRecord[]>();
 	for (const record of graph.records) {
-		const from = graph.nodes.get(record.sourceSession);
-		const to = graph.nodes.get(record.destinationSession);
-		if (!from || !to) continue;
-		const type = recordType(record);
-		const label = [record.ts.slice(0, 10), type, record.confidence].filter(Boolean).join("\\n");
-		const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
-		const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
-		lines.push(`  ${dotId(from.id)} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+		const list = edgesBySource.get(record.sourceSession) ?? [];
+		list.push(record);
+		edgesBySource.set(record.sourceSession, list);
+	}
+	for (const [sourceSession, sourceEdges] of edgesBySource) {
+		const from = graph.nodes.get(sourceSession);
+		if (!from) continue;
+		let previousState: string | undefined;
+		for (const record of sourceEdges.sort((a, b) => a.ts.localeCompare(b.ts))) {
+			const to = graph.nodes.get(record.destinationSession);
+			if (!to) continue;
+			const type = recordType(record);
+			const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
+			stateIds.push(stateId);
+			const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\\n");
+			lines.push(`  ${stateId} [shape=diamond, label="${dotEscape(stateLabel)}", fillcolor="#78350f", color="#f59e0b"];`);
+			lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
+			if (previousState) lines.push(`  ${previousState} -> ${stateId} [label="later", style=dotted, color="#f59e0b"];`);
+			const label = [record.overlay ? "overlay" : record.inferred ? "inferred" : "manifest", record.ts.slice(0, 16), type, record.confidence].filter(Boolean).join("\\n");
+			const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
+			const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
+			lines.push(`  ${stateId} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+			previousState = stateId;
+		}
 	}
 	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nclusters: cwd/repo lanes\\nsolid: explicit/authoritative\\ndashed: inferred/overlay/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
 	lines.push("}");
@@ -719,7 +746,7 @@ function escapeHtml(value: unknown) {
 
 function graphExportData(graph: Graph) {
 	return {
-		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, displayName: node.displayName, pinnedLineageName: node.pinnedLineageName, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0 })),
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, displayName: node.displayName, pinnedLineageName: node.pinnedLineageName, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0, lineCount: node.lineCount })),
 		edges: graph.records.flatMap((record, index) => {
 			const from = graph.nodes.get(record.sourceSession);
 			const to = graph.nodes.get(record.destinationSession);

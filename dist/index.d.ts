@@ -273,6 +273,7 @@ type SessionNode = {
     evidence?: unknown;
     metadata?: Record<string, unknown>;
     compactionCount?: number;
+    lineCount?: number;
 };
 type LogicalThread = {
     id: string;

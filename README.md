@@ -39,7 +39,7 @@ The singular `/session-graph ...` command is no longer part of the public comman
 
 ## Graphviz DOT/SVG
 
-`/session-graphs --dot` and `pigraph dot` write a Graphviz DOT lineage export under the current working directory's `session-graphs/` directory. The layout follows the same intent as `agent-session-store/scripts/build-graphs.ts`: cwd/repo lanes are rendered as clusters, session nodes are boxes, and relocation/derived/compaction edges use distinct line styles.
+`/session-graphs --dot` and `pigraph dot` write a Graphviz DOT lineage export under the current working directory's `session-graphs/` directory. The structure follows the older Mermaid output from `agent-session-store/scripts/build-graphs.ts`: start circles point to session boxes, yellow diamond state nodes represent source-session state at relocation times, dotted arrows show progression inside a session file, and solid/dashed/bold edges show relocation/derived/compaction links.
 
 ```bash
 /session-graphs --dot        # write .dot from inside Pi
