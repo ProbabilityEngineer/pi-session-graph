@@ -92,7 +92,6 @@ Fallback inputs, used only when the prepared graph export is unavailable:
 ## Pi session suite relationship
 
 - `agent-session-store`: provider-neutral canonical store and graph export builder.
-- `pi-session-store`: Pi-facing wrapper around store workflows.
 - `pi-session-move`: session-facing move and restart UX.
 - `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
 - `pi-session-graph`: read-only text status/lineage and graph artifact rendering.
@@ -111,7 +110,7 @@ pi -e ./index.ts
 
 ## Boundaries
 
-`agent-session-store` / `pi-session-store` owns provider imports, canonical SQLite/JSON exports, lineage/continuity/compaction/fork derivation, repo identity and alias facts, temporal work bursts, and provider/activity metrics.
+`agent-session-store` owns provider imports, canonical SQLite/JSON exports, lineage/continuity/compaction/fork derivation, repo identity and alias facts, temporal work bursts, and provider/activity metrics.
 
 `pi-session-graph` owns read-only rendering/navigation over prepared exports.
 
