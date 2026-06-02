@@ -1218,6 +1218,7 @@ function meaningfulLineageGraph(graph: Graph) {
 		degree.set(record.destinationSession, (degree.get(record.destinationSession) ?? 0) + 1);
 	}
 	const records = graph.records.filter((record) => {
+		if (record.sourceSession === record.destinationSession) return false;
 		const from = graph.nodes.get(record.sourceSession), to = graph.nodes.get(record.destinationSession);
 		if (!from || !to) return false;
 		if ((from.lineCount ?? 1) === 0 && (degree.get(from.path) ?? 0) <= 1) return false;
