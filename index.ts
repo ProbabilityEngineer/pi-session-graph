@@ -1021,17 +1021,14 @@ async function sessionGraphsWriteLines(_graph: Graph) {
 	const refreshLines = await refreshStoreExport();
 	const graph = await buildGraph();
 	const buildGraphs = await runAgentSessionStore("build-graphs");
-	const outputDir = join(agentDir(), "session-graph");
-	const files = ["lineage-full.html", "lineage-focused.html", "timeline-projects.html", "timeline-sessions.html"];
+	const graphBuilderFiles = buildGraphs.split("\n").filter((line) => /\/Desktop\/session-graphs\/.*\.(html|mmd|md|json)$/.test(line));
 	const interactive = await writeNamedInteractiveViewers(graph);
 	return [
 		"Session graphs",
 		"",
 		...refreshLines,
 		...(buildGraphs ? ["", buildGraphs] : []),
-		"",
-		"Wrote graph-builder files:",
-		...files.map((file) => shortPath(join(outputDir, file))),
+		...(graphBuilderFiles.length ? ["", "Wrote graph-builder files:", ...graphBuilderFiles.map(shortPath)] : []),
 		"",
 		"Wrote interactive viewer files:",
 		...interactive.map(shortPath),

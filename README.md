@@ -34,22 +34,22 @@ The singular `/session-graph ...` command is no longer part of the public comman
 
 ## Graph outputs
 
-Graph files are written by `agent-session-store` to:
+Graph files are written to:
 
 ```text
-~/.pi/agent/session-graph/
+~/Desktop/session-graphs/
 ```
 
-`/session-graphs` writes the same names and page titles as the graph builder:
+`/session-graphs` writes timestamped files using the same names and page titles as the graph builder:
 
-| File | What it shows |
+| File pattern | What it shows |
 |---|---|
-| `lineage-full.html` | Full temporal lineage graph: all visible lineage edges plus connected/significant standalone session starts. |
-| `lineage-focused.html` | Focused temporal lineage graph: sessions with one or more visible relocation/move/overlay edges; omits standalone starts. |
-| `timeline-projects.html` | Timeline grouped by project/folder label. |
-| `timeline-sessions.html` | Same timeline data grouped by individual session file. |
+| `<timestamp>-lineage-full.html` | Full temporal lineage graph: all visible lineage edges plus connected/significant standalone session starts. |
+| `<timestamp>-lineage-focused.html` | Focused temporal lineage graph: sessions with one or more visible relocation/move/overlay edges; omits standalone starts. |
+| `<timestamp>-timeline-projects.html` | Timeline grouped by project/folder label. |
+| `<timestamp>-timeline-sessions.html` | Same timeline data grouped by individual session file. |
 
-It also writes timestamped interactive versions of the older `pi-session-graph` viewers to `~/Desktop/session-graphs/`:
+It also writes timestamped interactive versions of the older `pi-session-graph` viewers to the same directory:
 
 ```text
 <timestamp>-lineage-full-interactive.html
