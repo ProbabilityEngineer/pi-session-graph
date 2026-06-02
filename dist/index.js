@@ -539,7 +539,7 @@ function dotEscape(value) {
 function dotId(value) {
     return `n_${shortHash(value)}`;
 }
-function dotGraph(graph, current) {
+function dotGraph(graph, current, options = {}) {
     const lines = [
         "digraph SessionLineage {",
         "  graph [rankdir=LR, bgcolor=\"#111827\", pad=0.35, nodesep=0.45, ranksep=0.8, splines=true, overlap=false];",
@@ -561,7 +561,7 @@ function dotGraph(graph, current) {
             const currentMark = node.path === current ? " ★" : "";
             const labelLines = [node.label + currentMark, "session", node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider, node.pinnedLineageName].filter(Boolean).join("\\n");
             const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
-            if (node.timestamp) {
+            if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
                 lines.push(`    ${startId} [shape=circle, label="start\\n${dotEscape(node.timestamp.slice(0, 16))}", fillcolor="#312e81", color="#818cf8"];`);
                 lines.push(`    ${startId} -> ${dotId(node.id)} [label="", color="#818cf8"];`);
@@ -586,18 +586,23 @@ function dotGraph(graph, current) {
             if (!to)
                 continue;
             const type = recordType(record);
-            const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
-            stateIds.push(stateId);
-            const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\\n");
-            lines.push(`  ${stateId} [shape=diamond, label="${dotEscape(stateLabel)}", fillcolor="#78350f", color="#f59e0b"];`);
-            lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
-            if (previousState)
-                lines.push(`  ${previousState} -> ${stateId} [label="later", style=dotted, color="#f59e0b"];`);
             const label = [record.overlay ? "overlay" : record.inferred ? "inferred" : "manifest", record.ts.slice(0, 16), type, record.confidence].filter(Boolean).join("\\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
             const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
-            lines.push(`  ${stateId} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
-            previousState = stateId;
+            if (options.starts) {
+                const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
+                stateIds.push(stateId);
+                const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\\n");
+                lines.push(`  ${stateId} [shape=diamond, label="${dotEscape(stateLabel)}", fillcolor="#78350f", color="#f59e0b"];`);
+                lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
+                if (previousState)
+                    lines.push(`  ${previousState} -> ${stateId} [label="later", style=dotted, color="#f59e0b"];`);
+                lines.push(`  ${stateId} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+                previousState = stateId;
+            }
+            else {
+                lines.push(`  ${dotId(from.id)} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+            }
         }
     }
     lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nclusters: cwd/repo lanes\\nsolid: explicit/authoritative\\ndashed: inferred/overlay/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
@@ -776,13 +781,14 @@ async function writeDotFiles(cwd, graph, current, options = {}) {
     const dir = join(cwd, "session-graphs");
     await mkdir(dir, { recursive: true });
     const stamp = timestamp();
-    const dot = dotGraph(graph, current);
-    const dotPath = join(dir, `session_graph_${stamp}.dot`);
+    const dot = dotGraph(graph, current, { starts: options.starts });
+    const name = options.basename ?? `session_graph_${stamp}`;
+    const dotPath = join(dir, `${name}.dot`);
     await writeFile(dotPath, dot + "\n", { encoding: "utf8", flag: "wx" });
     let svgPath;
     let svgError;
     if (options.svg) {
-        svgPath = join(dir, `session_graph_${stamp}.svg`);
+        svgPath = join(dir, `${name}.svg`);
         try {
             await execFileAsync("dot", ["-Gnewrank=true", "-Tsvg", dotPath, "-o", svgPath]);
         }
@@ -1031,6 +1037,254 @@ function isFocusedLineageRecord(record) {
     const type = recordType(record);
     return record.overlay || record.operationType === "repo_move" || record.operationType === "session_relocation" || record.operationType === "bucket_relocation" || ["relocation", "repo_move", "branch", "diverge"].includes(type);
 }
+function graphCloneWithRecords(graph, records) {
+    return rebuildGraph(graph, records);
+}
+async function renderDotSvg(dotPath) {
+    const svgPath = dotPath.replace(/\.dot$/, ".svg");
+    try {
+        await execFileAsync("dot", ["-Gnewrank=true", "-Tsvg", dotPath, "-o", svgPath]);
+        return { svgPath };
+    }
+    catch (error) {
+        return { svgPath: undefined, error: error instanceof Error ? error.message : String(error) };
+    }
+}
+async function writeDotPair(dir, name, dot, svg = true) {
+    await mkdir(dir, { recursive: true });
+    const dotPath = join(dir, `${name}.dot`);
+    await writeFile(dotPath, dot + "\n");
+    const rendered = svg ? await renderDotSvg(dotPath) : { svgPath: undefined, error: undefined };
+    return { dotPath, svgPath: rendered.svgPath, svgError: rendered.error };
+}
+function repoKeyForPath(graph, path, cwd) {
+    const node = graph.nodes.get(path);
+    return pathLabel(cwd ?? node?.cwd, path);
+}
+function repoJumpStats(graph) {
+    const nodeSessions = new Map();
+    const jumps = new Map();
+    for (const node of graph.nodes.values()) {
+        const key = repoKeyForPath(graph, node.path, node.cwd);
+        const set = nodeSessions.get(key) ?? new Set();
+        set.add(node.path);
+        nodeSessions.set(key, set);
+    }
+    for (const record of graph.records) {
+        if (record.sourceSession === record.destinationSession)
+            continue;
+        const from = repoKeyForPath(graph, record.sourceSession, record.fromCwd);
+        const to = repoKeyForPath(graph, record.destinationSession, record.toCwd);
+        if (!from || !to || from === to)
+            continue;
+        const key = `${from}\u0000${to}`;
+        const current = jumps.get(key) ?? { from, to, weight: 0 };
+        current.weight++;
+        jumps.set(key, current);
+    }
+    return { nodeSessions, jumps: [...jumps.values()].sort((a, b) => b.weight - a.weight || a.from.localeCompare(b.from) || a.to.localeCompare(b.to)) };
+}
+function repoJumpDot(graph, minWeight = 2) {
+    const { nodeSessions, jumps } = repoJumpStats(graph);
+    const used = new Set();
+    for (const jump of jumps)
+        if (jump.weight >= minWeight) {
+            used.add(jump.from);
+            used.add(jump.to);
+        }
+    const lines = [
+        "digraph RepoJumpMap {",
+        "  graph [rankdir=LR, bgcolor=\"#111827\", pad=0.35, nodesep=0.55, ranksep=0.9, splines=true, overlap=false];",
+        "  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\", fontsize=11, color=\"#64748b\", fillcolor=\"#1e293b\", fontcolor=\"#e5e7eb\"];",
+        "  edge [fontname=\"Helvetica\", fontsize=10, color=\"#60a5fa\", fontcolor=\"#cbd5e1\", arrowsize=0.8];",
+    ];
+    for (const repo of [...used].sort())
+        lines.push(`  ${dotId(repo)} [label="${dotEscape(`${repo}\\nsessions: ${nodeSessions.get(repo)?.size ?? 0}`)}", tooltip="${dotEscape(repo)}"];`);
+    for (const jump of jumps.filter((jump) => jump.weight >= minWeight)) {
+        const penwidth = Math.min(8, 1 + Math.log2(jump.weight));
+        lines.push(`  ${dotId(jump.from)} -> ${dotId(jump.to)} [label="${jump.weight} jumps", penwidth=${penwidth.toFixed(1)}, tooltip="${dotEscape(`${jump.from} -> ${jump.to}: ${jump.weight}`)}"];`);
+    }
+    lines.push("}");
+    return lines.join("\n");
+}
+function meaningfulLineageGraph(graph) {
+    const degree = new Map();
+    for (const record of graph.records) {
+        degree.set(record.sourceSession, (degree.get(record.sourceSession) ?? 0) + 1);
+        degree.set(record.destinationSession, (degree.get(record.destinationSession) ?? 0) + 1);
+    }
+    const records = graph.records.filter((record) => {
+        const from = graph.nodes.get(record.sourceSession), to = graph.nodes.get(record.destinationSession);
+        if (!from || !to)
+            return false;
+        if ((from.lineCount ?? 1) === 0 && (degree.get(from.path) ?? 0) <= 1)
+            return false;
+        if ((to.lineCount ?? 1) === 0 && (degree.get(to.path) ?? 0) <= 1)
+            return false;
+        return true;
+    });
+    return graphCloneWithRecords(graph, records);
+}
+function graphSummary(graph) {
+    const { nodeSessions, jumps } = repoJumpStats(graph);
+    const out = new Map();
+    for (const [repo, sessions] of nodeSessions)
+        out.set(repo, { repo, sessions: sessions.size, lines: 0, in: 0, out: 0, restarts: 0 });
+    for (const node of graph.nodes.values()) {
+        const repo = repoKeyForPath(graph, node.path, node.cwd);
+        const item = out.get(repo) ?? { repo, sessions: 0, lines: 0, in: 0, out: 0, restarts: 0 };
+        item.lines += node.lineCount ?? 0;
+        out.set(repo, item);
+    }
+    for (const jump of jumps) {
+        const from = out.get(jump.from);
+        if (from)
+            from.out += jump.weight;
+        const to = out.get(jump.to);
+        if (to)
+            to.in += jump.weight;
+    }
+    for (const record of graph.records) {
+        const repo = repoKeyForPath(graph, record.destinationSession, record.toCwd);
+        const item = out.get(repo);
+        if (item)
+            item.restarts++;
+    }
+    const leavesSet = new Set(leaves(graph).map((node) => node.path));
+    const falseStarts = [...graph.nodes.values()]
+        .filter((node) => (node.lineCount ?? 0) < 50 && leavesSet.has(node.path))
+        .sort((a, b) => (a.lineCount ?? 0) - (b.lineCount ?? 0) || a.label.localeCompare(b.label));
+    const repeatedStarts = [...graph.nodes.values()]
+        .filter((node) => node.timestamp)
+        .sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? ""))
+        .flatMap((node, index, arr) => {
+        const next = arr[index + 1];
+        if (!next || repoKeyForPath(graph, next.path, next.cwd) !== repoKeyForPath(graph, node.path, node.cwd))
+            return [];
+        const hours = (Date.parse(next.timestamp) - Date.parse(node.timestamp)) / 3600000;
+        return hours >= 0 && hours <= 6 ? [{ repo: repoKeyForPath(graph, node.path, node.cwd), first: node.timestamp, second: next.timestamp, hours }] : [];
+    });
+    return { repos: [...out.values()], jumps, falseStarts, repeatedStarts };
+}
+function tableHtml(headers, rows) {
+    return `<table><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("\n")}</tbody></table>`;
+}
+function reportShell(title, body) {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:2rem;line-height:1.45}a{color:#93c5fd}.card{background:#172033;border:1px solid #334155;border-radius:10px;padding:1rem;margin:1rem 0}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #334155;padding:.4rem;text-align:left;vertical-align:top}th{background:#0f172a}.muted{color:#94a3b8}code{background:#0f172a;padding:.1rem .25rem;border-radius:4px}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>\n`;
+}
+async function writeHotspotReports(reportDir, graph, stamp) {
+    const stats = graphSummary(graph);
+    const hotspotsPath = join(reportDir, "01-hotspots.html");
+    const falseStartsPath = join(reportDir, "03-false-starts.html");
+    const topSessions = [...stats.repos].sort((a, b) => b.sessions - a.sessions).slice(0, 25);
+    const topJumps = [...stats.repos].sort((a, b) => (b.in + b.out) - (a.in + a.out)).slice(0, 25);
+    await writeFile(hotspotsPath, reportShell(`${stamp} — Hotspots`, `<p>Ranked operational signals: busiest repos/projects, jump-heavy repos, and repeated starts. No transcript content is included.</p><div class="card"><h2>Top repos by sessions</h2>${tableHtml(["repo/project", "sessions", "lines", "jumps in", "jumps out", "restarts"], topSessions.map((r) => [r.repo, r.sessions, r.lines, r.in, r.out, r.restarts]))}</div><div class="card"><h2>Top repos by jumps in/out</h2>${tableHtml(["repo/project", "sessions", "jumps in", "jumps out", "total jumps"], topJumps.map((r) => [r.repo, r.sessions, r.in, r.out, r.in + r.out]))}</div><div class="card"><h2>Top jump pairs</h2>${tableHtml(["from", "to", "jumps"], stats.jumps.slice(0, 25).map((j) => [j.from, j.to, j.weight]))}</div><div class="card"><h2>Repeated starts within 6 hours</h2>${tableHtml(["repo/project", "first", "second", "hours"], stats.repeatedStarts.slice(0, 50).map((r) => [r.repo, r.first, r.second, r.hours.toFixed(1)]))}</div>`));
+    await writeFile(falseStartsPath, reportShell(`${stamp} — False Starts`, `<p>Short leaf sessions under 50 lines with no descendants. These are likely abandoned starts or very small completed interactions; inspect before deleting anything.</p>${tableHtml(["repo/project", "session label", "lines", "start", "path"], stats.falseStarts.slice(0, 250).map((n) => [repoKeyForPath(graph, n.path, n.cwd), n.label, n.lineCount ?? 0, n.timestamp ?? "", shortPath(n.path)]))}`));
+    return [
+        { title: "Hotspots: ranked repos, jumps, repeated starts", path: hotspotsPath, description: "What should I notice first?" },
+        { title: "False starts: short leaf sessions", path: falseStartsPath, description: "Likely abandoned or low-value sessions." },
+    ];
+}
+function filteredProjectGraph(graph, repo) {
+    const records = graph.records.filter((record) => repoKeyForPath(graph, record.sourceSession, record.fromCwd) === repo || repoKeyForPath(graph, record.destinationSession, record.toCwd) === repo);
+    return graphCloneWithRecords(graph, records);
+}
+function neighborhoodGraph(graph, sessionPath, hops = 2) {
+    const keep = new Set([sessionPath]);
+    for (let i = 0; i < hops; i++) {
+        for (const record of graph.records)
+            if (keep.has(record.sourceSession) || keep.has(record.destinationSession)) {
+                keep.add(record.sourceSession);
+                keep.add(record.destinationSession);
+            }
+    }
+    return graphCloneWithRecords(graph, graph.records.filter((record) => keep.has(record.sourceSession) && keep.has(record.destinationSession)));
+}
+async function writeFocusReports(reportDir, graph, stamp) {
+    const stats = graphSummary(graph);
+    const topRepos = [...stats.repos].sort((a, b) => b.sessions - a.sessions || b.lines - a.lines).slice(0, 5);
+    const artifacts = [];
+    const links = [];
+    for (const [index, repo] of topRepos.entries()) {
+        const safe = shortHash(repo.repo);
+        const g = filteredProjectGraph(graph, repo.repo);
+        const htmlPath = join(reportDir, `09-project-${index + 1}-${safe}-timeline.html`);
+        await writeTemporalHtml(reportDir, g, htmlPath, `${stamp} — Project Timeline — ${repo.repo}`, "label");
+        artifacts.push({ title: `Project timeline: ${repo.repo}`, path: htmlPath, description: "One project at a time with related jumps as context." });
+        links.push(`<li><a href="${escapeHtml(basename(htmlPath))}">${escapeHtml(repo.repo)}</a> — ${repo.sessions} sessions, ${repo.lines} lines</li>`);
+    }
+    const largest = [...graph.nodes.values()].sort((a, b) => (b.lineCount ?? 0) - (a.lineCount ?? 0))[0];
+    if (largest) {
+        const ng = neighborhoodGraph(graph, largest.path, 2);
+        const written = await writeDotPair(reportDir, `10-session-neighborhood-${shortHash(largest.path)}`, dotGraph(ng), true);
+        artifacts.push({ title: `Session neighborhood: ${largest.label}`, path: written.dotPath, description: "Two-hop ancestor/descendant/nearby jump subgraph for the largest session." });
+        if (written.svgPath)
+            artifacts.push({ title: `Session neighborhood SVG: ${largest.label}`, path: written.svgPath, description: "Two-hop focused subgraph." });
+    }
+    const indexPath = join(reportDir, "09-project-focus-index.html");
+    await writeFile(indexPath, reportShell(`${stamp} — Project Focus Index`, `<p>Focused timelines for top projects. Use these after hotspots identify a suspicious repo/project.</p><ol>${links.join("\n")}</ol>`));
+    artifacts.unshift({ title: "Project focus index", path: indexPath, description: "Top project timelines and focused drilldowns." });
+    return artifacts;
+}
+async function writeChartTimelineReports(reportDir, graph, stamp) {
+    const make = async (path, title, group) => {
+        const spans = graph.temporalActivitySpans ?? [];
+        const data = spans.map((span) => ({ name: group === "sessionId" ? span.sessionId ?? span.id : span.label ?? span.cwd ?? span.provider ?? "unknown", value: [span.start, span.end ?? span.start, span.provider ?? "unknown", span.lineCount ?? 0, span.cwd ?? ""] })).filter((row) => row.value[0]);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:0}#chart{height:92vh}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}</style></head><body><header><h1>${escapeHtml(title)}</h1><p class="muted">Chart-library timeline using Apache ECharts from CDN. Bars show session/activity spans; zoom and pan are enabled. No transcript content is included.</p></header><div id="chart"></div><script>const raw=${JSON.stringify(data).replace(/</g, "\\u003c")};const cats=[...new Set(raw.map(r=>r.name))].sort();const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.name+'<br>'+r.value[0]+' → '+r.value[1]+'<br>provider: '+r.value[2]+'<br>lines: '+r.value[3]+'<br>'+r.value[4]}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:260,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1',width:240,overflow:'truncate'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},dimensions:['start','end','cat'],encode:{x:[0,1],y:2},data:raw.map(r=>[r.value[0],r.value[1],r.name])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`;
+        await writeFile(path, html);
+    };
+    const projects = join(reportDir, "11-chart-timeline-projects.html");
+    const sessions = join(reportDir, "12-chart-timeline-sessions.html");
+    await make(projects, `${stamp} — Chart Timeline Projects`, "label");
+    await make(sessions, `${stamp} — Chart Timeline Sessions`, "sessionId");
+    return [
+        { title: "Chart timeline projects", path: projects, description: "Apache ECharts timeline grouped by project/cwd." },
+        { title: "Chart timeline sessions", path: sessions, description: "Apache ECharts timeline grouped by session." },
+    ];
+}
+async function writeReportPack(graph) {
+    const stamp = timestamp();
+    const root = join(desktopOutputRoot(), "session-graphs", stamp);
+    const archiveDir = join(root, "archive");
+    const reportDir = join(root, "reports");
+    await mkdir(archiveDir, { recursive: true });
+    await mkdir(reportDir, { recursive: true });
+    const artifacts = [];
+    const addDot = async (title, description, dir, name, dot) => {
+        const written = await writeDotPair(dir, name, dot, true);
+        artifacts.push({ title: `${title} DOT`, path: written.dotPath, description });
+        if (written.svgPath)
+            artifacts.push({ title: `${title} SVG`, path: written.svgPath, description });
+        else if (written.svgError)
+            artifacts.push({ title: `${title} SVG skipped`, path: written.dotPath, description: `${description} SVG failed: ${written.svgError}` });
+    };
+    await addDot("Full archive graph", "Complete preservation graph without artificial start nodes.", archiveDir, "full-session-graph", dotGraph(graph));
+    await addDot("Full archive graph with starts", "Forensic archive graph with explicit start/state nodes.", archiveDir, "full-session-graph-with-starts", dotGraph(graph, undefined, { starts: true }));
+    await writeFile(join(archiveDir, "raw-graph-data.json"), JSON.stringify(graphExportData(graph), null, 2) + "\n");
+    artifacts.push({ title: "Raw graph data JSON", path: join(archiveDir, "raw-graph-data.json"), description: "Metadata-only graph snapshot used by the reports." });
+    await addDot("Repo jump map", "Weighted repo/project transition graph; edges with weight 2+ only.", reportDir, "02-repo-jump-map", repoJumpDot(graph, 2));
+    await addDot("Meaningful lineage forest", "Connected meaningful chains; isolated and zero-line dead-end noise filtered.", reportDir, "04-meaningful-lineage-forest", dotGraph(meaningfulLineageGraph(graph)));
+    const focusedGraph = rebuildGraph(graph, graph.records.filter(isFocusedLineageRecord));
+    const lineageFullPath = join(reportDir, "05-lineage-full-interactive.html");
+    const lineageFocusedPath = join(reportDir, "06-lineage-focused-interactive.html");
+    const timelineProjectsPath = join(reportDir, "07-timeline-projects.html");
+    const timelineSessionsPath = join(reportDir, "08-timeline-sessions.html");
+    await writeHtmlViewer(reportDir, graph, { title: `${stamp} — Lineage Full Interactive`, outputPath: lineageFullPath });
+    await writeHtmlViewer(reportDir, focusedGraph, { title: `${stamp} — Lineage Focused Interactive`, outputPath: lineageFocusedPath });
+    await writeTemporalHtml(reportDir, graph, timelineProjectsPath, `${stamp} — Timeline Projects`, "label");
+    await writeTemporalHtml(reportDir, graph, timelineSessionsPath, `${stamp} — Timeline Sessions`, "sessionId");
+    artifacts.push({ title: "Lineage Full Interactive", path: lineageFullPath, description: "Inventory-style interactive full lineage." }, { title: "Lineage Focused Interactive", path: lineageFocusedPath, description: "Interactive graph limited to sessions with meaningful edges." }, { title: "Timeline Projects", path: timelineProjectsPath, description: "Timeline grouped by project/cwd." }, { title: "Timeline Sessions", path: timelineSessionsPath, description: "Timeline grouped by individual session." });
+    artifacts.push(...await writeHotspotReports(reportDir, graph, stamp));
+    artifacts.push(...await writeFocusReports(reportDir, graph, stamp));
+    artifacts.push(...await writeChartTimelineReports(reportDir, graph, stamp));
+    const rel = (path) => path.startsWith(root) ? path.slice(root.length + 1) : path;
+    const indexPath = join(root, "index.html");
+    const readmePath = join(root, "README.md");
+    const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Recommended reading order: hotspots, repo jump map, false starts, meaningful lineage forest, focused interactive views, archive only when reconstructing history.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Artifacts</h2><ol>${artifacts.map((a) => `<li><a href="${escapeHtml(rel(a.path))}">${escapeHtml(a.title)}</a><br/><span class="muted">${escapeHtml(a.description)}</span></li>`).join("\n")}</ol></div>`;
+    await writeFile(indexPath, reportShell(`${stamp} — Session Graph Report Index`, indexBody));
+    await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-meaningful-lineage-forest.svg`, `5. reports/05-lineage-full-interactive.html and later files`, `6. reports/09-project-focus-index.html`, `7. reports/11-chart-timeline-projects.html`, `8. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
+    return { root, indexPath, readmePath, artifacts };
+}
 async function writeNamedInteractiveViewers(graph) {
     const stamp = timestamp();
     const dir = join(desktopOutputRoot(), "session-graphs");
@@ -1053,14 +1307,16 @@ async function writeNamedInteractiveViewers(graph) {
 async function sessionGraphsWriteLines(_graph) {
     const refreshLines = await refreshStoreExport();
     const graph = await buildGraph();
-    const interactive = await writeNamedInteractiveViewers(graph);
+    const pack = await writeReportPack(graph);
     return [
-        "Session graphs",
+        "Session graph report pack",
         "",
         ...refreshLines,
         "",
-        "Wrote interactive viewer files:",
-        ...interactive.map(shortPath),
+        `Report folder: ${shortPath(pack.root)}`,
+        `Open first: ${shortPath(pack.indexPath)}`,
+        `README: ${shortPath(pack.readmePath)}`,
+        `Artifacts: ${pack.artifacts.length}`,
     ];
 }
 function cliUsage() {
