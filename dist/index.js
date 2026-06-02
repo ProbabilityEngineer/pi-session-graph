@@ -90,6 +90,32 @@ function cwdLabel(cwd) {
         return cwd;
     return basename(cwd) || cwd;
 }
+function bucketLabel(path) {
+    const bucket = path.match(/\/sessions\/--(.+?)--\//)?.[1];
+    if (!bucket)
+        return undefined;
+    const rules = [
+        [/^Users-sam-git-agents-(.+)$/, (match) => `/Users/sam/git/agents/${match[1]}`],
+        [/^Users-sam-git-public-(.+)$/, (match) => `/Users/sam/git/public/${match[1]}`],
+        [/^Users-sam-git-private-tools-(.+)$/, (match) => `/Users/sam/git/private-tools/${match[1]}`],
+        [/^Users-sam-git-private-utilities-(.+)$/, (match) => `/Users/sam/git/private-utilities/${match[1]}`],
+        [/^Users-sam-git-utilities-(.+)$/, (match) => `/Users/sam/git/utilities/${match[1]}`],
+        [/^Users-sam-git-(.+)$/, (match) => `/Users/sam/git/${match[1]}`],
+        [/^Users-sam-Documents-GitHub-(.+)$/, (match) => `/Users/sam/Documents/GitHub/${match[1]}`],
+        [/^Users-sam-(.+)$/, (match) => `/Users/sam/${match[1]}`],
+    ];
+    for (const [pattern, format] of rules) {
+        const match = bucket.match(pattern);
+        if (match)
+            return format(match);
+    }
+    return bucket;
+}
+function repoLabelForNode(node) {
+    if (node.cwd && node.cwd.startsWith("/"))
+        return cwdLabel(node.cwd);
+    return bucketLabel(node.path) ?? (node.cwd && !node.cwd.startsWith("(") ? node.cwd : undefined) ?? node.label ?? "unknown";
+}
 function pathLabel(cwd, path) {
     return cwd && !cwd.startsWith("(") ? cwdLabel(cwd) : cwdLabel(path);
 }
@@ -533,7 +559,10 @@ function mermaidLabel(value) {
     return value.replace(/\\/g, "\\\\").replace(/"/g, "&quot;").replace(/\r?\n/g, " ");
 }
 function laneKey(node) {
-    return node.label || cwdLabel(node.cwd) || "unknown";
+    return repoLabelForNode(node);
+}
+function agentLabel(node) {
+    return node.pinnedLineageName ?? node.displayName;
 }
 function dotEscape(value) {
     return String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, " ");
@@ -561,7 +590,9 @@ function dotGraph(graph, current, options = {}) {
         lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(label)}";`, "    color=\"#334155\";", "    fontcolor=\"#cbd5e1\";", "    style=\"rounded\";");
         for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
             const currentMark = node.path === current ? " ★" : "";
-            const labelLines = [node.label + currentMark, "session", node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider, node.pinnedLineageName].filter(Boolean).join("\\n");
+            const repo = repoLabelForNode(node);
+            const agent = agentLabel(node);
+            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider].filter(Boolean).join("\\n");
             const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
