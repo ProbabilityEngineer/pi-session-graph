@@ -849,7 +849,7 @@ async function dotWriteLines(cwd: string, graph: Graph, current?: string, option
 }
 
 async function writeDotFiles(cwd: string, graph: Graph, current?: string, options: { svg?: boolean } = {}) {
-	const dir = join(cwd, "session-graph");
+	const dir = join(cwd, "session-graphs");
 	await mkdir(dir, { recursive: true });
 	const stamp = timestamp();
 	const dot = dotGraph(graph, current);
@@ -1187,19 +1187,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 
-	pi.registerCommand("session-graphviz", {
-		description: "Write Graphviz DOT/SVG lineage files under the current repo's session-graph directory.",
+	pi.registerCommand("session-graphs", {
+		description: "Generate session graph artifacts. Use --dot for Graphviz DOT/SVG output.",
 		handler: async (args, ctx) => {
 			const flags = parseFlags(args);
-			const lines = await dotWriteLines(ctx.cwd, await buildGraph(), currentSession(ctx), { svg: flags.has("--svg") });
-			ctx.ui.notify(lines.join("\n"), "info");
-		},
-	});
-
-	pi.registerCommand("session-graphs", {
-		description: "Generate timestamped session graph HTML files on the Desktop.",
-		handler: async (_args, ctx) => {
-			const lines = await sessionGraphsWriteLines(await buildGraph());
+			const parsed = parseArgs(args);
+			const graph = await buildGraph();
+			const lines = flags.has("--dot") || parsed.includes("dot") || parsed.includes("graphviz")
+				? await dotWriteLines(ctx.cwd, graph, currentSession(ctx), { svg: flags.has("--svg") })
+				: await sessionGraphsWriteLines(graph);
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

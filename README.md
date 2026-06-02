@@ -17,7 +17,7 @@ Graph artifact generation:
 
 ```text
 /session-graphs
-/session-graphviz [--svg]
+/session-graphs --dot [--svg]
 ```
 
 CLI/admin equivalents:
@@ -35,15 +35,17 @@ npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 
 `pigraph` with no command prints help and does not inspect the store or generate files. Use `pigraph status` for the explicit status report. `/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write timestamped interactive viewer files. There is no `--refresh` flag.
 
-The singular `/session-graph ...` command is no longer part of the public command surface.
+The singular `/session-graph ...` command is no longer part of the public command surface; graph artifact functions are under `/session-graphs ...`.
 
 ## Graphviz DOT/SVG
 
-`/session-graphviz` and `pigraph dot` write a Graphviz DOT lineage export under the current working directory's `session-graph/` directory. The layout follows the same intent as `agent-session-store/scripts/build-graphs.ts`: cwd/repo lanes are rendered as clusters, session nodes are boxes, and relocation/derived/compaction edges use distinct line styles.
+`/session-graphs --dot` and `pigraph dot` write a Graphviz DOT lineage export under the current working directory's `session-graphs/` directory. The layout follows the same intent as `agent-session-store/scripts/build-graphs.ts`: cwd/repo lanes are rendered as clusters, session nodes are boxes, and relocation/derived/compaction edges use distinct line styles.
 
 ```bash
-pigraph dot        # write .dot
-pigraph dot --svg  # also run graphviz dot -Tsvg when installed
+/session-graphs --dot        # write .dot from inside Pi
+/session-graphs --dot --svg  # also run graphviz dot -Tsvg when installed
+pigraph dot                  # CLI equivalent
+pigraph dot --svg
 ```
 
 If Graphviz is not installed or `dot` is not on PATH, the DOT file is still written and the SVG step reports a clear skip message. On macOS, install Graphviz with:
