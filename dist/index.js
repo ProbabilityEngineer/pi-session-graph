@@ -37,7 +37,9 @@ function agentSessionStoreBinCandidates() {
     return [
         process.env.AGENT_SESSION_STORE_BIN,
         join(root, "node_modules", ".bin", `agent-session-store${suffix}`),
+        join(root, "..", ".bin", `agent-session-store${suffix}`),
         join(root, "..", "node_modules", ".bin", `agent-session-store${suffix}`),
+        join(root, "..", "agent-session-store", "dist", "bin", "agent-session-store.js"),
         "agent-session-store",
     ].filter((value) => Boolean(value));
 }
