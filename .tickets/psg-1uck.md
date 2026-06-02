@@ -1,6 +1,6 @@
 ---
 id: psg-1uck
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-02T02:37:48Z

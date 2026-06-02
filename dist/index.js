@@ -527,6 +527,52 @@ function mermaidLabel(value) {
 function laneKey(node) {
     return node.label || cwdLabel(node.cwd) || "unknown";
 }
+function dotEscape(value) {
+    return String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, " ");
+}
+function dotId(value) {
+    return `n_${shortHash(value)}`;
+}
+function dotGraph(graph, current) {
+    const lines = [
+        "digraph SessionLineage {",
+        "  graph [rankdir=LR, bgcolor=\"#111827\", pad=0.35, nodesep=0.45, ranksep=0.8, splines=true, overlap=false];",
+        "  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\", fontsize=10, color=\"#64748b\", fillcolor=\"#1e293b\", fontcolor=\"#e5e7eb\"];",
+        "  edge [fontname=\"Helvetica\", fontsize=9, color=\"#60a5fa\", fontcolor=\"#cbd5e1\", arrowsize=0.7];",
+    ];
+    const lanes = new Map();
+    for (const node of graph.nodes.values()) {
+        const key = laneKey(node);
+        const list = lanes.get(key) ?? [];
+        list.push(node);
+        lanes.set(key, list);
+    }
+    let cluster = 0;
+    for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(label)}";`, "    color=\"#334155\";", "    fontcolor=\"#cbd5e1\";", "    style=\"rounded\";");
+        for (const node of nodes.sort((a, b) => a.id.localeCompare(b.id))) {
+            const currentMark = node.path === current ? " ★" : "";
+            const labelLines = [node.label + currentMark, node.provider, node.pinnedLineageName, node.id].filter(Boolean).join("\\n");
+            const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
+            lines.push(`    ${dotId(node.id)} [label="${dotEscape(labelLines)}", tooltip="${dotEscape(node.path)}", fillcolor="${fill}"];`);
+        }
+        lines.push("  }");
+    }
+    for (const record of graph.records) {
+        const from = graph.nodes.get(record.sourceSession);
+        const to = graph.nodes.get(record.destinationSession);
+        if (!from || !to)
+            continue;
+        const type = recordType(record);
+        const label = [record.ts.slice(0, 10), type, record.confidence].filter(Boolean).join("\\n");
+        const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
+        const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
+        lines.push(`  ${dotId(from.id)} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+    }
+    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nclusters: cwd/repo lanes\\nsolid: explicit/authoritative\\ndashed: inferred/overlay/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+    lines.push("}");
+    return lines.join("\n");
+}
 function mermaid(graph, current) {
     const lines = ["graph TD"];
     const lanes = new Map();
@@ -679,6 +725,42 @@ $('toggleLegend').onclick=()=>$('legend').classList.toggle('hidden');function re
 async function temporalWriteLines(cwd, graph, outputPath) {
     const htmlPath = await writeTemporalHtml(cwd, graph, outputPath);
     return ["Canonical temporal HTML", "", `Source: ${graph.source}`, `Spans: ${graph.temporalActivitySpans?.length ?? 0}`, `Work bursts: ${graph.workBursts?.length ?? 0}`, `Activity metrics: ${graph.activityMetrics?.length ?? 0}`, `Compactions: ${graph.compactionEvents?.length ?? 0}`, "", "Wrote:", shortPath(htmlPath)];
+}
+async function dotWriteLines(cwd, graph, current, options = {}) {
+    const result = await writeDotFiles(cwd, graph, current, options);
+    return [
+        "Graphviz lineage export",
+        "",
+        `Source: ${graph.source}`,
+        `Sessions: ${graph.nodes.size}`,
+        `Edges: ${graph.records.length}`,
+        "",
+        "Wrote:",
+        shortPath(result.dotPath),
+        ...(result.svgPath ? [shortPath(result.svgPath)] : []),
+        ...(result.svgError ? ["", `SVG skipped: ${result.svgError}`, "Install Graphviz and ensure `dot` is on PATH to write SVG."] : []),
+    ];
+}
+async function writeDotFiles(cwd, graph, current, options = {}) {
+    const dir = join(cwd, "session-graph");
+    await mkdir(dir, { recursive: true });
+    const stamp = timestamp();
+    const dot = dotGraph(graph, current);
+    const dotPath = join(dir, `session_graph_${stamp}.dot`);
+    await writeFile(dotPath, dot + "\n", { encoding: "utf8", flag: "wx" });
+    let svgPath;
+    let svgError;
+    if (options.svg) {
+        svgPath = join(dir, `session_graph_${stamp}.svg`);
+        try {
+            await execFileAsync("dot", ["-Tsvg", dotPath, "-o", svgPath]);
+        }
+        catch (error) {
+            svgPath = undefined;
+            svgError = error instanceof Error ? error.message : String(error);
+        }
+    }
+    return { dotPath, svgPath, svgError };
 }
 async function writeGraphFiles(cwd, graph, current, filters = {}) {
     const dir = join(cwd, "session-graph");
@@ -959,6 +1041,7 @@ function cliUsage() {
         "  lineage [--files]   Show current session lineage",
         "  leaves [--all]      Show resume leaf suggestions",
         "  repos               Show repo identity summary",
+        "  dot [--svg]         Write Graphviz DOT, optionally SVG if dot is installed",
         "  graphs              Rebuild/export and write graph HTML artifacts",
         "",
         "Options:",
@@ -983,6 +1066,8 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
         return leavesLines(graph, current, flags.has("--all")).join("\n");
     if (subcommand === "repos")
         return reposLines(graph).join("\n");
+    if (subcommand === "dot" || subcommand === "graphviz")
+        return (await dotWriteLines(cwd, graph, current, { svg: flags.has("--svg") })).join("\n");
     if (subcommand === "graphs")
         return (await sessionGraphsWriteLines(graph)).join("\n");
     return cliUsage();
@@ -998,6 +1083,14 @@ export default function (pi) {
         description: "Show current session ancestry chain. Use --files for paths.",
         handler: async (args, ctx) => {
             ctx.ui.notify(lineageLines(await buildGraph(), currentSession(ctx), parseFlags(args).has("--files")).join("\n"), "info");
+        },
+    });
+    pi.registerCommand("session-graphviz", {
+        description: "Write Graphviz DOT/SVG lineage files under the current repo's session-graph directory.",
+        handler: async (args, ctx) => {
+            const flags = parseFlags(args);
+            const lines = await dotWriteLines(ctx.cwd, await buildGraph(), currentSession(ctx), { svg: flags.has("--svg") });
+            ctx.ui.notify(lines.join("\n"), "info");
         },
     });
     pi.registerCommand("session-graphs", {
