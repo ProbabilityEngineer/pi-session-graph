@@ -32,7 +32,7 @@
     ]
   },
   "bin": {
-    "pigraph": "./dist/bin/pigraph.js"
+    "pigraph": "dist/bin/pigraph.js"
   },
   "files": [
     "dist",
