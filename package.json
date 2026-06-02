@@ -1,6 +1,6 @@
 {
   "name": "pi-session-graph",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Session lineage graph tools for Pi",
   "type": "module",
   "main": "dist/index.js",
@@ -20,6 +20,9 @@
   "license": "MIT",
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.74.0"
+  },
+  "dependencies": {
+    "agent-session-store": "^0.1.1"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "latest",

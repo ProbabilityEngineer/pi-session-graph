@@ -3,7 +3,8 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
@@ -128,23 +129,42 @@ function desktopOutputRoot() {
 	return join(process.env.HOME ?? ".", "Desktop");
 }
 
-function agentSessionStoreRoot() {
-	return resolve(process.env.AGENT_SESSION_STORE_REPO ?? join(process.env.HOME ?? ".", "git", "agents", "agent-session-store"));
+function packageRoot() {
+	const here = dirname(fileURLToPath(import.meta.url));
+	return basename(here) === "dist" ? join(here, "..") : here;
 }
 
-async function runAgentSessionStore(script: "build-store" | "export-graph" | "build-graphs") {
-	const cwd = agentSessionStoreRoot();
-	const { stdout, stderr } = await execFileAsync("npm", ["run", script], { cwd, env: process.env });
-	return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+function agentSessionStoreBinCandidates() {
+	const root = packageRoot();
+	const suffix = process.platform === "win32" ? ".cmd" : "";
+	return [
+		process.env.AGENT_SESSION_STORE_BIN,
+		join(root, "node_modules", ".bin", `agent-session-store${suffix}`),
+		join(root, "..", "node_modules", ".bin", `agent-session-store${suffix}`),
+		"agent-session-store",
+	].filter((value): value is string => Boolean(value));
+}
+
+async function runAgentSessionStore(command: "build" | "build-store" | "export-graph" | "build-graphs") {
+	const errors: string[] = [];
+	for (const bin of agentSessionStoreBinCandidates()) {
+		try {
+			const { stdout, stderr } = await execFileAsync(bin, [command], { env: process.env });
+			return [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			errors.push(`${bin}: ${message}`);
+		}
+	}
+	throw new Error(`Unable to run bundled agent-session-store. Install dependencies or set AGENT_SESSION_STORE_BIN. Attempts:\n${errors.join("\n")}`);
 }
 
 async function refreshStoreExport(): Promise<string[]> {
-	const cwd = agentSessionStoreRoot();
-	const build = await runAgentSessionStore("build-store");
+	const build = await runAgentSessionStore("build");
 	const exportGraph = await runAgentSessionStore("export-graph");
 	return [
 		"Refreshed graph export",
-		`Core repo: ${shortPath(cwd)}`,
+		"Backend: agent-session-store",
 		...(build ? [build] : []),
 		...(exportGraph ? [exportGraph] : []),
 	];

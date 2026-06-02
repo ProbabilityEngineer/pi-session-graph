@@ -2,7 +2,7 @@
 
 Lightweight Pi extension for text session status/lineage and generated session graph artifacts.
 
-`pi-session-graph` does not mutate raw session JSONLs or manifests. Canonical imports/rebuilds live in `agent-session-store`; this package reads prepared exports and renders views.
+`pi-session-graph` does not mutate raw session JSONLs or manifests. Canonical imports/rebuilds live in the bundled `agent-session-store` dependency; this package invokes that backend to prepare exports, then renders views.
 
 ## Commands
 
@@ -76,6 +76,8 @@ Legacy store input:
 ~/.pi/agent/session-graph/curated-store.json
 ```
 
+`/session-graphs` and `pigraph graphs` run the bundled `agent-session-store` backend first, so delayed installs are supported: a user can install only `pi-session-move` initially, then install `pi-session-graph` later and rebuild from raw sessions plus move manifests.
+
 `agent-session-store` merges legacy and namespaced session-move manifests before graph export:
 
 ```text
@@ -92,7 +94,7 @@ Fallback inputs, used only when the prepared graph export is unavailable:
 
 ## Pi session suite relationship
 
-- `agent-session-store`: provider-neutral canonical store and graph export builder.
+- `agent-session-store`: provider-neutral canonical store and graph export builder, installed as this package's backend dependency.
 - `pi-session-move`: session-facing move and restart UX.
 - `pi-repo-move`: filesystem repo move UX (`/repo-move <target>`).
 - `pi-session-graph`: read-only text status/lineage and graph artifact rendering.
