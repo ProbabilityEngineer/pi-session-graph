@@ -1020,15 +1020,11 @@ async function writeNamedInteractiveViewers(graph: Graph) {
 async function sessionGraphsWriteLines(_graph: Graph) {
 	const refreshLines = await refreshStoreExport();
 	const graph = await buildGraph();
-	const buildGraphs = await runAgentSessionStore("build-graphs");
-	const graphBuilderFiles = buildGraphs.split("\n").filter((line) => /\/Desktop\/session-graphs\/.*\.(html|mmd|md|json)$/.test(line));
 	const interactive = await writeNamedInteractiveViewers(graph);
 	return [
 		"Session graphs",
 		"",
 		...refreshLines,
-		...(buildGraphs ? ["", buildGraphs] : []),
-		...(graphBuilderFiles.length ? ["", "Wrote graph-builder files:", ...graphBuilderFiles.map(shortPath)] : []),
 		"",
 		"Wrote interactive viewer files:",
 		...interactive.map(shortPath),
