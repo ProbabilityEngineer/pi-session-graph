@@ -102,10 +102,25 @@ Fallback inputs, used only when the prepared graph export is unavailable:
 pi install git:github.com/ProbabilityEngineer/pi-session-graph
 ```
 
+This package ships committed `dist/` JavaScript so Pi git installs can load the extension and the `pigraph` CLI without running TypeScript directly. Package entry points are:
+
+```text
+pi extension: ./dist/index.js
+CLI bin:      ./dist/bin/pigraph.js
+```
+
+Normal npm installs expose `pigraph` through npm's bin shim location. Pi git installs clone the package under `~/.pi/agent/git/...`; if you want `pigraph` on your shell PATH from a Pi git install, create a user shim in a PATH directory such as `~/.pi/agent/bin`:
+
+```bash
+mkdir -p ~/.pi/agent/bin
+ln -sfn ~/.pi/agent/git/github.com/ProbabilityEngineer/pi-session-graph/dist/bin/pigraph.js ~/.pi/agent/bin/pigraph
+```
+
 Local testing:
 
 ```bash
-pi -e ./index.ts
+npm run build
+pi -e ./dist/index.js
 ```
 
 ## Boundaries

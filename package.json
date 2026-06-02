@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "description": "Session lineage graph tools for Pi",
   "type": "module",
-  "main": "index.ts",
-  "types": "index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "lint": "tsc --noEmit",
-    "whole-lineage": "npx tsx scripts/whole-lineage-graph.ts"
+    "whole-lineage": "npx tsx scripts/whole-lineage-graph.ts",
+    "build": "tsc --project tsconfig.json"
   },
   "keywords": [
     "pi",
@@ -27,10 +28,16 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ]
   },
   "bin": {
-    "pigraph": "./bin/pigraph.ts"
-  }
+    "pigraph": "./dist/bin/pigraph.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "DESIGN.md"
+  ]
 }
