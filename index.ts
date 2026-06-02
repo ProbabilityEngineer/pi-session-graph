@@ -984,24 +984,23 @@ function htmlShell(title: string, body: string) {
 }
 
 async function sessionGraphsWriteLines(graph: Graph) {
-	await refreshStoreExport();
+	const refreshLines = await refreshStoreExport();
 	graph = await buildGraph();
-	const dir = join(desktopOutputRoot(), "session-graphs");
-	await mkdir(dir, { recursive: true });
-	const stamp = timestamp();
-	const outputs = [
-		["lineage-full", lineageSvgHtml(graph, "lineage-full", stamp)],
-		["lineage-focused", lineageSvgHtml(graph, "lineage-focused", stamp)],
-		["timeline-projects", timelineHtml(graph, "timeline-projects", stamp)],
-		["timeline-sessions", timelineHtml(graph, "timeline-sessions", stamp)],
-	] as const;
-	const paths: string[] = [];
-	for (const [name, html] of outputs) {
-		const path = join(dir, `${stamp}-${name}.html`);
-		await writeFile(path, html, { encoding: "utf8", flag: "wx" });
-		paths.push(path);
-	}
-	return ["Session graphs", "", `Source: ${graph.source}`, `Records: ${graph.records.length}`, `Sessions: ${graph.nodes.size}`, "", "Wrote:", ...paths.map(shortPath)];
+	const outputRoot = desktopOutputRoot();
+	const lineageLines = await htmlWriteLines(outputRoot, graph);
+	const temporalLines = await temporalWriteLines(outputRoot, graph);
+	const mermaidLines = await graphWriteLines(outputRoot, graph, undefined, true, {});
+	return [
+		"Session graphs",
+		"",
+		...refreshLines,
+		"",
+		...lineageLines,
+		"",
+		...temporalLines,
+		"",
+		...mermaidLines,
+	];
 }
 
 async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
@@ -1051,9 +1050,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("session-graphs", {
 		description: "Generate timestamped session graph HTML files on the Desktop.",
 		handler: async (_args, ctx) => {
-			ctx.ui.setStatus("session-graphs", "building graph files");
 			const lines = await sessionGraphsWriteLines(await buildGraph());
-			ctx.ui.setStatus("session-graphs", "wrote graph files");
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

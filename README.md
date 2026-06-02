@@ -28,7 +28,7 @@ pigraph graphs
 npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 ```
 
-`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write a fresh timestamped set of graph files. There is no `--refresh` flag.
+`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write the pre-existing graph viewer artifacts. There is no `--refresh` flag.
 
 The singular `/session-graph ...` command is no longer part of the public command surface.
 
@@ -37,34 +37,24 @@ The singular `/session-graph ...` command is no longer part of the public comman
 Graph files are written to:
 
 ```text
-~/Desktop/session-graphs/
+~/Desktop/session-graph/
 ```
 
-Each run writes timestamp-prefixed HTML files and does not overwrite previous runs:
+`/session-graphs` writes the older viewer styles rather than the simplified four-file HTML/SVG prototype:
 
-| File suffix | Old report | What it shows | Best for |
-|---|---|---|---|
-| `lineage-full.html` | `temporal-lineage.html` | All known session graph nodes with available edges/significant starts. Rendered as HTML/SVG, not Mermaid. | Global overview |
-| `lineage-focused.html` | `temporal-lineage-focused.html` | Sessions that participate in at least one relocation/session-move/repo-move/overlay edge. Rendered as HTML/SVG, not Mermaid. | Continuity debugging |
-| `timeline-projects.html` | `temporal-timeline.html` | Timeline grouped by project/folder label. | Project/cwd movement over time |
-| `timeline-sessions.html` | `temporal-timeline-sessions.html` | Timeline grouped by individual session file. | Session-file movement over time |
+| File pattern | What it shows |
+|---|---|
+| `session_graph_viewer_<timestamp>.html` | Interactive lineage/detail viewer over graph-export data. |
+| `temporal_graph_<timestamp>.html` | Canonical temporal activity viewer over graph-export temporal spans/bursts/metrics/compactions. |
+| `session_graph_<timestamp>.md` | Mermaid Markdown graph export. |
+| `graph_<timestamp>.mmd` | Raw Mermaid graph export. |
 
-Example filenames:
+For the clearer named reports (`lineage-full`, `lineage-focused`, `timeline-projects`, `timeline-sessions`), use `agent-session-store`:
 
-```text
-2026-06-02T12-34-56-789Z-lineage-full.html
-2026-06-02T12-34-56-789Z-lineage-focused.html
-2026-06-02T12-34-56-789Z-timeline-projects.html
-2026-06-02T12-34-56-789Z-timeline-sessions.html
+```bash
+cd /Users/sam/git/agents/agent-session-store
+npm run build-graphs
 ```
-
-Page titles include the same timestamp and graph type, for example:
-
-```text
-2026-06-02T12-34-56-789Z — Lineage Full
-```
-
-Mermaid is not used for the primary lineage graph rendering because large session graphs exceed Mermaid renderer size limits.
 
 For a rough recreation of the archived `whole-lineage-graph.html` / `.mmd` style, use:
 

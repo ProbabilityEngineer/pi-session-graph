@@ -1,6 +1,6 @@
 ---
 id: psg-qq2q
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-02T01:12:11Z
