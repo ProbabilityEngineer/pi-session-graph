@@ -48,7 +48,7 @@ pigraph dot                  # CLI equivalent
 pigraph dot --svg
 ```
 
-If Graphviz is not installed or `dot` is not on PATH, the DOT file is still written and the SVG step reports a clear skip message. On macOS, install Graphviz with:
+If Graphviz is not installed, `dot` is not on PATH, or Graphviz cannot render a large clustered graph, the DOT file is still written and the SVG step reports a clear skip message. On macOS, install Graphviz with:
 
 ```bash
 brew install graphviz
@@ -57,7 +57,7 @@ brew install graphviz
 DOT files are plain text. To render one manually:
 
 ```bash
-dot -Tsvg path/to/session_graph.dot -o session_graph.svg
+dot -Gnewrank=true -Tsvg path/to/session_graph.dot -o session_graph.svg
 open session_graph.svg
 ```
 

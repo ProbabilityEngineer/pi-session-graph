@@ -871,7 +871,7 @@ async function dotWriteLines(cwd: string, graph: Graph, current?: string, option
 		"Wrote:",
 		shortPath(result.dotPath),
 		...(result.svgPath ? [shortPath(result.svgPath)] : []),
-		...(result.svgError ? ["", `SVG skipped: ${result.svgError}`, "Install Graphviz and ensure `dot` is on PATH to write SVG."] : []),
+		...(result.svgError ? ["", `SVG skipped: ${result.svgError}`, "If this says `spawn dot ENOENT`, install Graphviz and ensure `dot` is on PATH. Otherwise DOT was written but Graphviz failed to render this graph."] : []),
 	];
 }
 
@@ -887,7 +887,7 @@ async function writeDotFiles(cwd: string, graph: Graph, current?: string, option
 	if (options.svg) {
 		svgPath = join(dir, `session_graph_${stamp}.svg`);
 		try {
-			await execFileAsync("dot", ["-Tsvg", dotPath, "-o", svgPath]);
+			await execFileAsync("dot", ["-Gnewrank=true", "-Tsvg", dotPath, "-o", svgPath]);
 		} catch (error) {
 			svgPath = undefined;
 			svgError = error instanceof Error ? error.message : String(error);
