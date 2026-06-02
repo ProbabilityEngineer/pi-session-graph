@@ -71,6 +71,8 @@ type SessionNode = {
 	path: string;
 	cwd: string;
 	label: string;
+	displayName?: string;
+	pinnedLineageName?: string;
 	provider?: string;
 	type?: string;
 	status?: string;
@@ -298,10 +300,14 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 	const sessionsById = new Map((store.sessions ?? []).map((session) => [session.id, session]));
 	if (!sessionsById.size || !(store.edges ?? []).length) return genericGraph;
 	const labelByTarget = new Map<string, string>();
+	const displayNameByTarget = new Map<string, string>();
+	const pinnedLineageNameByTarget = new Map<string, string>();
 	for (const label of store.labels ?? []) {
 		if (label.targetType !== "session") continue;
+		if (label.labelType === "display_name") displayNameByTarget.set(label.targetId, label.value);
+		if (label.labelType === "pinned_lineage_name" || label.labelType === "lineage") pinnedLineageNameByTarget.set(label.targetId, label.value);
 		const previous = labelByTarget.get(label.targetId);
-		if (!previous || label.labelType === "lineage" || label.labelType === "display_name") labelByTarget.set(label.targetId, label.value);
+		if (!previous || label.labelType === "pinned_lineage_name" || label.labelType === "lineage" || label.labelType === "display_name") labelByTarget.set(label.targetId, label.value);
 	}
 	const classificationByEdge = new Map((store.classifications ?? []).filter((item) => item.targetType === "edge").map((item) => [item.targetId, item]));
 	const records: RelocationRecord[] = [];
@@ -379,6 +385,8 @@ function buildStoreGraph(store: StoreExport): Graph | undefined {
 		const node = graph.nodes.get(session.canonicalKey);
 		const explicit = labelByTarget.get(session.id) ?? session.metadata?.displayName;
 		if (node && explicit) node.label = explicit;
+		if (node) node.displayName = displayNameByTarget.get(session.id) ?? session.metadata?.displayName;
+		if (node) node.pinnedLineageName = pinnedLineageNameByTarget.get(session.id);
 		if (node) node.provider = session.provider ?? session.metadata?.provider;
 	}
 	const compactionCounts = new Map<string, number>();
@@ -641,7 +649,7 @@ function escapeHtml(value: unknown) {
 
 function graphExportData(graph: Graph) {
 	return {
-		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0 })),
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, displayName: node.displayName, pinnedLineageName: node.pinnedLineageName, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0 })),
 		edges: graph.records.flatMap((record, index) => {
 			const from = graph.nodes.get(record.sourceSession);
 			const to = graph.nodes.get(record.destinationSession);
@@ -805,12 +813,15 @@ async function listSessionFiles(root = join(agentDir(), "sessions")) {
 function statusLines(graph: Graph, current: string | undefined, cwd = process.cwd()) {
 	const lineage = lineageFor(graph, current);
 	const leaf = current ? !graph.children.has(current) : false;
+	const node = current ? graph.nodes.get(current) : undefined;
 	return [
 		"Session graph status",
 		"",
 		`Current cwd: ${shortPath(cwd)}`,
 		`Current session: ${current ? shortPath(current) : "(ephemeral)"}`,
 		`Current id: ${current ? sessionId(current) : "(none)"}`,
+		`Current display name: ${node?.displayName ?? "(unknown)"}`,
+		`Pinned lineage name: ${node?.pinnedLineageName ?? "(unnamed)"}`,
 		`Tracked: ${current && graph.byDestination.has(current) ? "yes" : "no"}`,
 		`Generation/depth: ${lineage.length}`,
 		`Leaf: ${leaf ? "yes" : "no"}`,

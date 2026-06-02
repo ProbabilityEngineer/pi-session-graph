@@ -1,6 +1,6 @@
 ---
 id: psg-k8w0
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-01T23:46:33Z
