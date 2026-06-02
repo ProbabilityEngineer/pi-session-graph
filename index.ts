@@ -816,6 +816,9 @@ function statusLines(graph: Graph, current: string | undefined, cwd = process.cw
 	const lineage = lineageFor(graph, current);
 	const leaf = current ? !graph.children.has(current) : false;
 	const node = current ? graph.nodes.get(current) : undefined;
+	const chainSources = new Set(lineage.map((record) => record.sourceSession));
+	const chainDestinations = new Set(lineage.map((record) => record.destinationSession));
+	const lineageForks = graph.records.filter((record) => chainSources.has(record.sourceSession) && !chainDestinations.has(record.destinationSession));
 	return [
 		"Session graph status",
 		"",
@@ -827,6 +830,8 @@ function statusLines(graph: Graph, current: string | undefined, cwd = process.cw
 		`Tracked: ${current && graph.byDestination.has(current) ? "yes" : "no"}`,
 		`Generation/depth: ${lineage.length}`,
 		`Leaf: ${leaf ? "yes" : "no"}`,
+		`Lineage split/forks: ${lineageForks.length}`,
+		...(lineageForks.length && node?.pinnedLineageName ? [`Branch naming: forked lineage; use /move-lineage --name <new-branch-name> if this branch is separate work`] : []),
 		`Source: ${graph.source}`,
 		`Records: ${graph.records.length}`,
 		`Overlay records: ${graph.overlays.length}`,

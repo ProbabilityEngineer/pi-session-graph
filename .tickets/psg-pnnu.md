@@ -1,6 +1,6 @@
 ---
 id: psg-pnnu
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-02T02:43:11Z
