@@ -1,18 +1,27 @@
 {
   "name": "pi-session-graph",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Session lineage graph tools for Pi",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "homepage": "https://github.com/ProbabilityEngineer/pi-session-graph#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ProbabilityEngineer/pi-session-graph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ProbabilityEngineer/pi-session-graph/issues"
+  },
   "scripts": {
     "lint": "tsc --noEmit",
     "whole-lineage": "npx tsx scripts/whole-lineage-graph.ts",
     "build": "tsc --project tsconfig.json"
   },
   "keywords": [
-    "pi",
+    "pi-package",
     "pi-extension",
+    "pi",
     "session",
     "lineage",
     "graph"
