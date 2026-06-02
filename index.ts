@@ -685,22 +685,23 @@ function graphExportData(graph: Graph) {
 	};
 }
 
-async function writeHtmlViewer(cwd: string, graph: Graph) {
-	const dir = join(cwd, "session-graph");
-	await mkdir(dir, { recursive: true });
+async function writeHtmlViewer(cwd: string, graph: Graph, options: { title?: string; outputPath?: string } = {}) {
+	const dir = options.outputPath ? undefined : join(cwd, "session-graph");
+	if (dir) await mkdir(dir, { recursive: true });
 	const stamp = timestamp();
+	const title = options.title ?? "Pi Session Graph Viewer";
 	const data = JSON.stringify(graphExportData(graph)).replace(/</g, "\\u003c");
 	const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Pi Session Graph Viewer</title>
+<title>${title}</title>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8dee9;background:#111827} header{position:sticky;top:0;background:#0f172a;padding:12px 16px;border-bottom:1px solid #334155;z-index:2} input,select,button{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:6px;padding:4px 6px;margin-right:8px} main{display:grid;grid-template-columns:1fr 420px;gap:0;height:calc(100vh - 58px)} #graph{overflow:auto;padding:16px}.lane{border:1px solid #334155;border-radius:10px;margin:0 0 14px;padding:10px;background:#172033}.node{display:inline-block;border:1px solid #64748b;border-radius:8px;padding:6px 8px;margin:4px;background:#1e293b;cursor:pointer}.node:hover,.edge:hover,.selected{border-color:#93c5fd;outline:1px solid #93c5fd}.edge{border-left:3px solid #60a5fa;padding:6px 8px;margin:5px;background:#0f172a;cursor:pointer}.edge.low{border-left-color:#f97316}.edge.authoritative{border-left-color:#22c55e}.field{margin:0 0 8px}.field b{color:#cbd5e1}.actions{margin:8px 0}.code{white-space:pre-wrap;background:#020617;border:1px solid #334155;border-radius:8px;padding:8px} aside{border-left:1px solid #334155;padding:16px;background:#0f172a;overflow:auto} .muted{color:#94a3b8}.hidden{display:none}</style>
 </head>
 <body>
 <header>
-<strong>Pi Session Graph</strong>
+<strong>${title}</strong>
 <input id="search" placeholder="search title/cwd/session/provider" size="34" />
 <select id="confidence"><option value="">all confidence</option><option>authoritative</option><option>high</option><option>medium</option><option>low</option><option>unknown</option></select>
 <select id="provider"><option value="">all providers</option></select>
@@ -735,12 +736,12 @@ function render(){const {nodes,edges}=currentData();graph.innerHTML='';for(const
 $('hop1').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,1);render()}};$('hop2').onclick=()=>{if(selected?.kind==='node'){focus=neighborhood(selected.id,2);render()}};$('resetView').onclick=()=>{focus=null;render()};$('exportSubgraph').onclick=()=>{details.textContent=JSON.stringify(currentData(),null,2)};$('exportMermaid').onclick=()=>{const {nodes,edges}=currentData(),ids=new Map(nodes.map(n=>[n.id,n]));details.textContent=['graph TD',...nodes.map(n=>'  '+n.id+'["'+n.label.replace(/"/g,'&quot;')+'"]'),...edges.filter(e=>ids.has(e.from)&&ids.has(e.to)).map(e=>'  '+e.from+' -->|'+e.type+'| '+e.to)].join('\n')};
 for(const id of ['search','confidence','provider','nodeType','edgeType','operationType','tool','provenance','status','hasEvidence','relations']) $(id).addEventListener('input',render); render();</script>
 </body></html>`;
-	const htmlPath = join(dir, `session_graph_viewer_${stamp}.html`);
+	const htmlPath = options.outputPath ?? join(dir!, `session_graph_viewer_${stamp}.html`);
 	await writeFile(htmlPath, html, { encoding: "utf8", flag: "wx" });
 	return htmlPath;
 }
 
-async function writeTemporalHtml(cwd: string, graph: Graph, outputPath?: string) {
+async function writeTemporalHtml(cwd: string, graph: Graph, outputPath?: string, title = "Pi Session Temporal View") {
 	const dir = outputPath ? undefined : join(cwd, "session-graph");
 	if (dir) await mkdir(dir, { recursive: true });
 	const spans = graph.temporalActivitySpans ?? [];
@@ -748,8 +749,8 @@ async function writeTemporalHtml(cwd: string, graph: Graph, outputPath?: string)
 	const metrics = graph.activityMetrics ?? [];
 	const compactions = graph.compactionEvents ?? [];
 	const data = JSON.stringify({ spans, bursts, metrics, compactions }).replace(/</g, "\\u003c");
-	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>Pi Session Temporal View</title><style>
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#111827;color:#e5e7eb}header{position:sticky;top:0;z-index:2;background:#0f172a;border-bottom:1px solid #334155;padding:12px 16px}.legend{margin-top:8px;padding:8px;border:1px solid #334155;border-radius:8px;background:#172033}button,input,select{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:6px;padding:4px 6px;margin-right:8px}main{display:grid;grid-template-columns:1fr 360px;height:calc(100vh - 112px)}#timeline{overflow:auto;padding:16px}.lane{margin:0 0 10px}.lane h3{font-size:13px;margin:0 0 4px;color:#cbd5e1}.bar{height:18px;border-radius:4px;background:#60a5fa;margin:2px 0;position:relative;cursor:pointer}.bar.pi{background:#22c55e}.bar.codex{background:#a78bfa}.bar.claude{background:#f59e0b}.burst{height:8px;background:#f97316;border-radius:4px;margin-top:2px}.compact{display:inline-block;background:#eab308;color:#111827;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:11px}.gap{position:absolute;height:100%;border-left:1px dashed #facc15;color:#facc15;font-size:11px;writing-mode:vertical-rl;top:0}aside{border-left:1px solid #334155;padding:16px;background:#0f172a;overflow:auto}.muted{color:#94a3b8}.hidden{display:none}</style></head><body><header><strong>Canonical temporal activity</strong> <input id="search" placeholder="filter provider/cwd/label" size="34"/><select id="group"><option value="label">project/cwd lane</option><option value="provider">provider</option><option value="sessionId">session</option></select><select id="axis"><option value="compressed">compressed time</option><option value="real">real time</option></select><button id="toggleLegend">toggle legend</button><span id="counts" class="muted"></span><div id="legend" class="legend">Renders prepared <code>graph-export.json</code> temporalActivitySpans, workBursts, activityMetrics, and compactionEvents. Bars show real session timestamps/durations in details. Compressed time collapses inactive gaps over 7 days into labeled breaks; real time is proportional. Orange ticks are store-derived work bursts. Yellow badges are compaction/checkpoint counts. Accrued effort metrics are provider/cwd aggregates exported by agent-session-store.</div></header><main><section id="timeline"></section><aside><h2>Details</h2><pre id="details">Select a span, burst, or metric.</pre></aside></main><script>const DATA=${data};const $=id=>document.getElementById(id),timeline=$('timeline'),details=$('details');
+	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>${title}</title><style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#111827;color:#e5e7eb}header{position:sticky;top:0;z-index:2;background:#0f172a;border-bottom:1px solid #334155;padding:12px 16px}.legend{margin-top:8px;padding:8px;border:1px solid #334155;border-radius:8px;background:#172033}button,input,select{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:6px;padding:4px 6px;margin-right:8px}main{display:grid;grid-template-columns:1fr 360px;height:calc(100vh - 112px)}#timeline{overflow:auto;padding:16px}.lane{margin:0 0 10px}.lane h3{font-size:13px;margin:0 0 4px;color:#cbd5e1}.bar{height:18px;border-radius:4px;background:#60a5fa;margin:2px 0;position:relative;cursor:pointer}.bar.pi{background:#22c55e}.bar.codex{background:#a78bfa}.bar.claude{background:#f59e0b}.burst{height:8px;background:#f97316;border-radius:4px;margin-top:2px}.compact{display:inline-block;background:#eab308;color:#111827;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:11px}.gap{position:absolute;height:100%;border-left:1px dashed #facc15;color:#facc15;font-size:11px;writing-mode:vertical-rl;top:0}aside{border-left:1px solid #334155;padding:16px;background:#0f172a;overflow:auto}.muted{color:#94a3b8}.hidden{display:none}</style></head><body><header><strong>${title}</strong> <input id="search" placeholder="filter provider/cwd/label" size="34"/><select id="group"><option value="label">project/cwd lane</option><option value="provider">provider</option><option value="sessionId">session</option></select><select id="axis"><option value="compressed">compressed time</option><option value="real">real time</option></select><button id="toggleLegend">toggle legend</button><span id="counts" class="muted"></span><div id="legend" class="legend">Renders prepared <code>graph-export.json</code> temporalActivitySpans, workBursts, activityMetrics, and compactionEvents. Bars show real session timestamps/durations in details. Compressed time collapses inactive gaps over 7 days into labeled breaks; real time is proportional. Orange ticks are store-derived work bursts. Yellow badges are compaction/checkpoint counts. Accrued effort metrics are provider/cwd aggregates exported by agent-session-store.</div></header><main><section id="timeline"></section><aside><h2>Details</h2><pre id="details">Select a span, burst, or metric.</pre></aside></main><script>const DATA=${data};const $=id=>document.getElementById(id),timeline=$('timeline'),details=$('details');
 function time(x){const t=Date.parse(x||'');return Number.isFinite(t)?t:0}function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}function keyOf(s,g){return s[g]||s.label||s.cwd||s.provider||'unknown'}function compactCount(s){return DATA.compactions.filter(c=>c.sessionId&&c.sessionId===s.sessionId).reduce((n,c)=>n+(c.eventCount||c.summaryEventCount||1),0)}
 function axis(spans){const times=spans.flatMap(s=>[time(s.start),time(s.end)||time(s.start)]).filter(Boolean).sort((a,b)=>a-b);const min=times[0]||0,max0=times.at(-1)||min;const day=86400000,threshold=7*day,keep=day;let removed=0,gaps=[];for(let i=1;i<times.length;i++){const gap=times[i]-times[i-1];if(gap>threshold){removed+=gap-keep;gaps.push({at:times[i]-removed,label:'gap: '+Math.round(gap/day)+' days'})}}return {min,max:max0-removed,gaps,project(t){if($('axis').value==='real')return t;let r=0;for(let i=1;i<times.length;i++){const gap=times[i]-times[i-1];if(gap>threshold&&t>=times[i])r+=gap-keep}return t-r}}}
 $('toggleLegend').onclick=()=>$('legend').classList.toggle('hidden');function render(){const q=$('search').value.toLowerCase(),g=$('group').value;const spans=DATA.spans.filter(s=>!q||JSON.stringify(s).toLowerCase().includes(q));const ax=axis(spans);const width=Math.max(900, timeline.clientWidth-40);timeline.innerHTML='';const wrap=document.createElement('div');wrap.style.position='relative';wrap.style.minHeight='24px';if($('axis').value==='compressed')for(const gap of ax.gaps){const ge=document.createElement('div');ge.className='gap';ge.style.left=((gap.at-ax.min)/(ax.max-ax.min))*width+'px';ge.textContent=gap.label;wrap.append(ge)}timeline.append(wrap);const groups=[...new Set(spans.map(s=>keyOf(s,g)))].sort();for(const lane of groups){const box=document.createElement('div');box.className='lane';box.innerHTML='<h3>'+esc(lane)+'</h3>';for(const s of spans.filter(s=>keyOf(s,g)===lane)){const left=ax.max>ax.min?((ax.project(time(s.start))-ax.min)/(ax.max-ax.min))*width:0;const right=ax.max>ax.min?((ax.project(time(s.end)||time(s.start))-ax.min)/(ax.max-ax.min))*width:left+6;const bar=document.createElement('div');bar.className='bar '+esc(s.provider);bar.style.marginLeft=Math.max(0,left)+'px';bar.style.width=Math.max(6,right-left)+'px';bar.textContent=(s.provider||'')+' '+(compactCount(s)?' compact x'+compactCount(s):'');bar.onclick=()=>details.textContent=JSON.stringify({...s,compactionCount:compactCount(s)},null,2);box.append(bar)}timeline.append(box)}const b=document.createElement('div');b.className='lane';b.innerHTML='<h3>Work bursts / accrued effort</h3>';for(const burst of DATA.bursts){const el=document.createElement('div');el.className='burst';el.title=JSON.stringify(burst);el.onclick=()=>details.textContent=JSON.stringify(burst,null,2);b.append(el)}for(const metric of DATA.metrics.slice(0,80)){const el=document.createElement('button');el.textContent=(metric.provider||'provider')+' '+(metric.cwd||'')+' sessions='+metric.sessionCount+' lines='+(metric.lineCount||0);el.onclick=()=>details.textContent=JSON.stringify(metric,null,2);b.append(el)}timeline.append(b);$('counts').textContent=spans.length+' spans, '+DATA.bursts.length+' bursts, '+DATA.compactions.length+' compactions'}for(const id of ['search','group','axis'])$(id).addEventListener('input',render);render();</script></body></html>`;
@@ -990,19 +991,37 @@ function htmlShell(title: string, body: string) {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:2rem;line-height:1.4}.wrap{height:82vh;overflow:auto;border:1px solid #334155;border-radius:10px;background:#0f172a}svg{width:100%;height:100%}a{color:#93c5fd}ol{max-height:40vh;overflow:auto}.muted{color:#94a3b8}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>\n`;
 }
 
+async function writeNamedInteractiveViewers(graph: Graph) {
+	const stamp = timestamp();
+	const dir = join(desktopOutputRoot(), "session-graphs");
+	await mkdir(dir, { recursive: true });
+	const lineageTitle = `${stamp} — Lineage Full Interactive`;
+	const timelineTitle = `${stamp} — Timeline Projects Interactive`;
+	const lineagePath = join(dir, `${stamp}-lineage-full-interactive.html`);
+	const timelinePath = join(dir, `${stamp}-timeline-projects-interactive.html`);
+	await writeHtmlViewer(dir, graph, { title: lineageTitle, outputPath: lineagePath });
+	await writeTemporalHtml(dir, graph, timelinePath, timelineTitle);
+	return [lineagePath, timelinePath];
+}
+
 async function sessionGraphsWriteLines(_graph: Graph) {
 	const refreshLines = await refreshStoreExport();
+	const graph = await buildGraph();
 	const buildGraphs = await runAgentSessionStore("build-graphs");
 	const outputDir = join(agentDir(), "session-graph");
 	const files = ["lineage-full.html", "lineage-focused.html", "timeline-projects.html", "timeline-sessions.html"];
+	const interactive = await writeNamedInteractiveViewers(graph);
 	return [
 		"Session graphs",
 		"",
 		...refreshLines,
 		...(buildGraphs ? ["", buildGraphs] : []),
 		"",
-		"Wrote:",
+		"Wrote graph-builder files:",
 		...files.map((file) => shortPath(join(outputDir, file))),
+		"",
+		"Wrote interactive viewer files:",
+		...interactive.map(shortPath),
 	];
 }
 
