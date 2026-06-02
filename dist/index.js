@@ -930,8 +930,26 @@ async function sessionGraphsWriteLines(_graph) {
         ...interactive.map(shortPath),
     ];
 }
+function cliUsage() {
+    return [
+        "Usage: pigraph <command> [options]",
+        "",
+        "Commands:",
+        "  status              Show current session graph status",
+        "  lineage [--files]   Show current session lineage",
+        "  leaves [--all]      Show resume leaf suggestions",
+        "  repos               Show repo identity summary",
+        "  graphs              Rebuild/export and write graph HTML artifacts",
+        "",
+        "Options:",
+        "  --input <path>      Read a specific graph export JSON",
+        "  -h, --help          Show this help",
+    ].join("\n");
+}
 async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
-    const subcommand = argv[0] ?? "status";
+    const subcommand = argv[0];
+    if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h")
+        return cliUsage();
     const rest = argv.slice(1);
     const flags = new Set(rest);
     const inputPath = optionValue(rest, "--input");
@@ -947,7 +965,7 @@ async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
         return reposLines(graph).join("\n");
     if (subcommand === "graphs")
         return (await sessionGraphsWriteLines(graph)).join("\n");
-    return "Usage: pigraph [status|lineage|leaves|repos|graphs] [--files] [--all] [--input path]";
+    return cliUsage();
 }
 export default function (pi) {
     pi.registerCommand("session-status", {

@@ -22,7 +22,8 @@ Graph artifact generation:
 CLI/admin equivalents:
 
 ```bash
-pigraph status
+pigraph                 # help / command summary
+pigraph status          # text status for the current session graph
 pigraph lineage [--files]
 pigraph leaves [--all]
 pigraph repos
@@ -30,7 +31,7 @@ pigraph graphs
 npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 ```
 
-`/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write timestamped interactive viewer files. There is no `--refresh` flag.
+`pigraph` with no command prints help and does not inspect the store or generate files. Use `pigraph status` for the explicit status report. `/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write timestamped interactive viewer files. There is no `--refresh` flag.
 
 The singular `/session-graph ...` command is no longer part of the public command surface.
 
@@ -109,7 +110,19 @@ pi extension: ./dist/index.js
 CLI bin:      ./dist/bin/pigraph.js
 ```
 
-Normal npm installs expose `pigraph` through npm's bin shim location. Pi git installs clone the package under `~/.pi/agent/git/...`; if you want `pigraph` on your shell PATH from a Pi git install, create a user shim in a PATH directory such as `~/.pi/agent/bin`:
+Normal npm installs expose `pigraph` through npm's bin shim location. For global npm installs, that is usually:
+
+```text
+$(npm prefix -g)/bin/pigraph
+```
+
+With nvm this may resolve to a path like:
+
+```text
+~/.nvm/versions/node/<version>/bin/pigraph
+```
+
+Pi git installs clone the package under `~/.pi/agent/git/...`; if you want `pigraph` on your shell PATH from a Pi git install, create a user shim in a PATH directory such as `~/.pi/agent/bin`:
 
 ```bash
 mkdir -p ~/.pi/agent/bin
