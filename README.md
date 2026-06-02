@@ -25,6 +25,7 @@ CLI equivalents:
 pigraph status
 pigraph lineage [--files]
 pigraph graphs
+npm run whole-lineage   # rough archived-style whole-lineage Mermaid HTML/MMD
 ```
 
 `/session-graphs` and `pigraph graphs` always rebuild/export the canonical store, then write a fresh timestamped set of graph files. There is no `--refresh` flag.
@@ -64,6 +65,14 @@ Page titles include the same timestamp and graph type, for example:
 ```
 
 Mermaid is not used for the primary lineage graph rendering because large session graphs exceed Mermaid renderer size limits.
+
+For a rough recreation of the archived `whole-lineage-graph.html` / `.mmd` style, use:
+
+```bash
+npm run whole-lineage
+```
+
+This writes simple white-background Mermaid artifacts to `~/.pi/agent/session-graph/whole-lineage-graph.html` and `.mmd`.
 
 ## Data sources
 
