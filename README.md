@@ -46,7 +46,18 @@ pigraph dot        # write .dot
 pigraph dot --svg  # also run graphviz dot -Tsvg when installed
 ```
 
-If Graphviz is not installed or `dot` is not on PATH, the DOT file is still written and the SVG step reports a clear skip message.
+If Graphviz is not installed or `dot` is not on PATH, the DOT file is still written and the SVG step reports a clear skip message. On macOS, install Graphviz with:
+
+```bash
+brew install graphviz
+```
+
+DOT files are plain text. To render one manually:
+
+```bash
+dot -Tsvg path/to/session_graph.dot -o session_graph.svg
+open session_graph.svg
+```
 
 ## Graph outputs
 
