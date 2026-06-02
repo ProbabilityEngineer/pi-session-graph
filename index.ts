@@ -791,7 +791,10 @@ async function writeHtmlViewer(cwd: string, graph: Graph, options: { title?: str
 	if (dir) await mkdir(dir, { recursive: true });
 	const stamp = timestamp();
 	const title = options.title ?? "Pi Session Graph Viewer";
-	const data = JSON.stringify(graphExportData(graph)).replace(/</g, "\\u003c");
+	const exportData = graphExportData(graph);
+	const data = JSON.stringify(exportData).replace(/</g, "\\u003c");
+	const staticLanes = [...new Set(exportData.nodes.map((node) => node.label || "(unlabeled)").filter(Boolean))].sort().slice(0, 80);
+	const staticHtml = [`<div class="lane"><h3>Static fallback</h3><p class="muted">If this does not become interactive, JavaScript failed or was blocked. Leave the search box empty to see all nodes; use it only to filter by label, cwd, provider, or session id.</p><p>${exportData.nodes.length} nodes, ${exportData.edges.length} edges embedded in this file.</p></div>`, ...staticLanes.map((lane) => `<div class="lane"><h3>${escapeHtml(lane)}</h3>${exportData.nodes.filter((node) => (node.label || "(unlabeled)") === lane).slice(0, 60).map((node) => `<button class="node" type="button">${escapeHtml(node.label || "(unlabeled)")} · ${escapeHtml(node.id)}${node.compactionCount ? ` · compact x${node.compactionCount}` : ""}</button>`).join("")}</div>`), `<div class="lane"><h3>Edges preview</h3>${exportData.edges.slice(0, 250).map((edge) => `<div class="edge ${escapeHtml(edge.confidence)}">${escapeHtml(edge.label || edge.type || "edge")} · ${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</div>`).join("")}</div>`].join("\n");
 	const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -814,9 +817,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;color:#d8d
 <select id="status"><option value="">all status</option></select>
 <label><input type="checkbox" id="hasEvidence" /> has evidence</label>
 <label><input type="checkbox" id="relations" /> contradictions/supersessions</label>
-<span class="muted" id="counts"></span>
+<span class="muted" id="counts">${exportData.nodes.length} nodes, ${exportData.edges.length} edges</span>
+<div class="muted" style="margin-top:6px">Search is optional. Leave it blank to show everything; type a repo/cwd/provider/session fragment only to filter.</div>
 </header>
-<main><section id="graph"></section><aside><h2>Details</h2><div class="actions"><button id="hop1">1-hop</button><button id="hop2">2-hop</button><button id="resetView">reset</button><button id="exportSubgraph">export JSON</button><button id="exportMermaid">export Mermaid</button></div><div id="details" class="code">Select a node or edge.</div></aside></main>
+<main><section id="graph">${staticHtml}</section><aside><h2>Details</h2><div class="actions"><button id="hop1">1-hop</button><button id="hop2">2-hop</button><button id="resetView">reset</button><button id="exportSubgraph">export JSON</button><button id="exportMermaid">export Mermaid</button></div><div id="details" class="code">Select a node or edge.</div></aside></main>
 <script>const DATA=${data};
 const $=id=>document.getElementById(id); const graph=$('graph'), details=$('details');let selected=null,focus=null;
 function uniq(xs){return [...new Set(xs.filter(Boolean))].sort()}function esc(s){return String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
