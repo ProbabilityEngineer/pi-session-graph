@@ -565,7 +565,7 @@ function agentLabel(node) {
     return node.pinnedLineageName ?? node.displayName;
 }
 function dotEscape(value) {
-    return String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, " ");
+    return String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\r?\n/g, "\\n");
 }
 function dotId(value) {
     return `n_${shortHash(value)}`;
@@ -587,12 +587,12 @@ function dotGraph(graph, current, options = {}) {
     let cluster = 0;
     const stateIds = [];
     for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-        lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(label)}";`, "    color=\"#334155\";", "    fontcolor=\"#cbd5e1\";", "    style=\"rounded\";");
+        lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
         for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
             const currentMark = node.path === current ? " ★" : "";
             const repo = repoLabelForNode(node);
             const agent = agentLabel(node);
-            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider].filter(Boolean).join("\\n");
+            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider].filter(Boolean).join("\n");
             const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
@@ -619,13 +619,14 @@ function dotGraph(graph, current, options = {}) {
             if (!to)
                 continue;
             const type = recordType(record);
-            const label = [record.overlay ? "overlay" : record.inferred ? "inferred" : "manifest", record.ts.slice(0, 16), type, record.confidence].filter(Boolean).join("\\n");
+            const eventLabel = record.operationType === "session_relocation" ? "move" : record.mode ?? type;
+            const label = [eventLabel, record.ts.slice(0, 16), record.confidence].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
             const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
             if (options.starts) {
                 const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
                 stateIds.push(stateId);
-                const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\\n");
+                const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\n");
                 lines.push(`  ${stateId} [shape=diamond, label="${dotEscape(stateLabel)}", fillcolor="#78350f", color="#f59e0b"];`);
                 lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
                 if (previousState)
