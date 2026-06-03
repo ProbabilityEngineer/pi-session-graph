@@ -582,12 +582,23 @@ function dotEscape(value) {
 function dotId(value) {
     return `n_${shortHash(value)}`;
 }
-const agentPalette = ["#22c55e", "#38bdf8", "#a78bfa", "#f472b6", "#facc15", "#fb923c", "#2dd4bf", "#c084fc", "#84cc16", "#f87171"];
-function agentColor(agent) {
-    if (!agent)
-        return "#60a5fa";
-    const hash = [...agent].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 0);
-    return agentPalette[hash % agentPalette.length];
+function hslToHex(hue, saturation, lightness) {
+    const c = (1 - Math.abs(2 * lightness - 1)) * saturation;
+    const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    const m = lightness - c / 2;
+    const [r, g, b] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
+    return `#${[r, g, b].map((value) => Math.round((value + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+function agentColorMap(agents) {
+    const sorted = [...new Set([...agents].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const map = new Map();
+    const offset = 132;
+    for (const [index, agent] of sorted.entries())
+        map.set(agent, hslToHex((offset + index * 360 / Math.max(sorted.length, 1)) % 360, 0.72, 0.62));
+    return map;
+}
+function agentColor(colors, agent) {
+    return agent ? colors.get(agent) ?? "#60a5fa" : "#60a5fa";
 }
 function dotHtmlLabel(agent, lines, color) {
     const body = lines.map((line, index) => {
@@ -642,6 +653,7 @@ function dotGraph(graph, current, options = {}) {
         if (!changed)
             break;
     }
+    const colors = agentColorMap(propagatedAgent.values());
     let cluster = 0;
     const stateIds = [];
     for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -658,7 +670,7 @@ function dotGraph(graph, current, options = {}) {
             const departedLabel = outgoing[0] ? `departed: ${outgoing[0].ts.slice(0, 16)}` : undefined;
             const labelLines = [agent ? `agent: ${agent}` : "session", `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean);
             const fill = "#3f2f12";
-            const nodeAgentColor = agentColor(agent);
+            const nodeAgentColor = agentColor(colors, agent);
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
                 lines.push(`    ${startId} [shape=circle, label="start\\n${dotEscape(node.timestamp.slice(0, 16))}", fillcolor="#312e81", color="#818cf8"];`);
@@ -691,7 +703,7 @@ function dotGraph(graph, current, options = {}) {
             const confidenceLabel = record.confidence && !["authoritative", "filename-and-session-bucket"].includes(record.confidence) ? record.confidence : undefined;
             const label = [`${edgeAgent} ${eventLabel}`, confidenceLabel].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
-            const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : agentColor(edgeAgent);
+            const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : agentColor(colors, edgeAgent);
             if (options.starts) {
                 const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
                 stateIds.push(stateId);
