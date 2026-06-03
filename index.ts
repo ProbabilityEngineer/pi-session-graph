@@ -636,7 +636,6 @@ function graphLegend() {
 		"- `-->` explicit/authoritative continuation edge",
 		"- `-.->` inferred, derived, overlay, or lower-confidence edge",
 		"- `==>` compaction/checkpoint summary event inside a session",
-		"- `★` current session, when known",
 		"- Mermaid subgraphs are lane/row delimiters grouped by cwd/repo label",
 		"- edge label format: `date / edge type or classification / confidence`",
 		"- confidence values include `authoritative`, `high`, `medium`, `low`, and source-specific values such as `filename-and-session-bucket`",
@@ -712,7 +711,6 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 	for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
 		lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
 		for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
-			const currentMark = node.path === current ? " ★" : "";
 			const repo = repoLabelForNode(node);
 			const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
 			const providerLabel = node.provider && node.provider !== "pi" ? `provider: ${node.provider}` : undefined;
@@ -722,8 +720,8 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 				? incoming ? `arrived: ${incoming.ts.slice(0, 16)}` : node.timestamp ? `lineage start: ${node.timestamp.slice(0, 16)} (filename)` : undefined
 				: `active since: ${(incoming?.ts ?? node.timestamp ?? "unknown").slice(0, 16)}${incoming ? "" : " (filename)"}`;
 			const departedLabel = outgoing[0] ? `departed: ${outgoing[0].ts.slice(0, 16)}` : undefined;
-			const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean).join("\n");
-			const fill = node.path === current ? "#312e81" : "#1e293b";
+			const labelLines = [agent ? `agent: ${agent}` : "session", `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean).join("\n");
+			const fill = "#1e293b";
 			if (options.starts && node.timestamp) {
 				const startId = `${dotId(node.id)}_start`;
 				lines.push(`    ${startId} [shape=circle, label="start\\n${dotEscape(node.timestamp.slice(0, 16))}", fillcolor="#312e81", color="#818cf8"];`);
@@ -767,7 +765,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 			}
 		}
 	}
-	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nbox dates show arrive/depart/active since\\nblue edge: moved\\ndashed edge: inferred move\\nred edge: branched\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nbox dates show arrive/depart/active since\\nblue edge: moved\\ndashed edge: inferred move\\nred edge: branched\", fillcolor=\"#0f172a\", color=\"#475569\"];");
 	lines.push("}");
 	return lines.join("\n");
 }
@@ -785,8 +783,7 @@ function mermaid(graph: Graph, current?: string) {
 	for (const [index, [label, nodes]] of sortedLanes.entries()) {
 		lines.push(`  subgraph LANE_${index}["${mermaidLabel(label)}"]`, "    direction TB");
 		for (const node of nodes.sort((a, b) => a.id.localeCompare(b.id))) {
-			const currentMark = node.path === current ? " ★" : "";
-			lines.push(`    ${node.id}["${mermaidLabel(node.label)}${currentMark}<br/>${node.id}"]`);
+			lines.push(`    ${node.id}["${mermaidLabel(node.label)}<br/>${node.id}"]`);
 		}
 		lines.push("  end");
 	}
@@ -798,7 +795,7 @@ function mermaid(graph: Graph, current?: string) {
 		const edgeLabel = [record.ts.slice(0, 10), record.displayLabel ?? record.lineageKind ?? record.edgeType, record.confidence].filter(Boolean).join(" / ");
 		lines.push(`  ${from.id} ${style}|${mermaidLabel(edgeLabel)}| ${to.id}`);
 	}
-	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_COMPACTION[compaction/checkpoint] ==> LEG_TARGET", "    LEG_CURRENT[current session has ★]", "    LEG_LANES[lane boxes group cwd/repo rows]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
+	lines.push("", "  subgraph LEGEND[Legend]", "    LEG_EXPLICIT[explicit/authoritative] --> LEG_TARGET[continuation]", "    LEG_INFERRED[inferred/derived/overlay] -.-> LEG_TARGET", "    LEG_COMPACTION[compaction/checkpoint] ==> LEG_TARGET", "    LEG_LANES[lane boxes group cwd/repo rows]", "    LEG_LABEL[edge label: date / type / confidence]", "  end");
 	return lines.join("\n");
 }
 
