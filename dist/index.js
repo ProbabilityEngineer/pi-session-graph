@@ -569,6 +569,20 @@ function dotEscape(value) {
 function dotId(value) {
     return `n_${shortHash(value)}`;
 }
+const agentPalette = ["#22c55e", "#38bdf8", "#a78bfa", "#f472b6", "#facc15", "#fb923c", "#2dd4bf", "#c084fc", "#84cc16", "#f87171"];
+function agentColor(agent) {
+    if (!agent)
+        return "#60a5fa";
+    const hash = [...agent].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 0);
+    return agentPalette[hash % agentPalette.length];
+}
+function dotHtmlLabel(agent, lines, color) {
+    const body = lines.map((line, index) => {
+        const text = escapeHtml(line);
+        return index === 0 && agent ? `<FONT COLOR="${color}">${text}</FONT>` : text;
+    }).join("<BR/>");
+    return `<${body}>`;
+}
 function dotGraph(graph, current, options = {}) {
     const lines = [
         "digraph SessionLineage {",
@@ -618,7 +632,7 @@ function dotGraph(graph, current, options = {}) {
     let cluster = 0;
     const stateIds = [];
     for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-        lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
+        lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#f97316\";", "    fontcolor=\"#fdba74\";", "    style=\"rounded,dashed\";");
         for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
             const repo = repoLabelForNode(node);
             const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
@@ -629,14 +643,15 @@ function dotGraph(graph, current, options = {}) {
                 ? incoming ? `arrived: ${incoming.ts.slice(0, 16)}` : node.timestamp ? `lineage start: ${node.timestamp.slice(0, 16)} (filename)` : undefined
                 : `active since: ${(incoming?.ts ?? node.timestamp ?? "unknown").slice(0, 16)}${incoming ? "" : " (filename)"}`;
             const departedLabel = outgoing[0] ? `departed: ${outgoing[0].ts.slice(0, 16)}` : undefined;
-            const labelLines = [agent ? `agent: ${agent}` : "session", `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean).join("\n");
+            const labelLines = [agent ? `agent: ${agent}` : "session", `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean);
             const fill = "#1e293b";
+            const nodeAgentColor = agentColor(agent);
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
                 lines.push(`    ${startId} [shape=circle, label="start\\n${dotEscape(node.timestamp.slice(0, 16))}", fillcolor="#312e81", color="#818cf8"];`);
                 lines.push(`    ${startId} -> ${dotId(node.id)} [label="", color="#818cf8"];`);
             }
-            lines.push(`    ${dotId(node.id)} [label="${dotEscape(labelLines)}", tooltip="${dotEscape(node.path)}", fillcolor="${fill}"];`);
+            lines.push(`    ${dotId(node.id)} [label=${dotHtmlLabel(agent, labelLines, nodeAgentColor)}, tooltip="${dotEscape(node.path)}", fillcolor="${fill}"];`);
         }
         lines.push("  }");
     }
@@ -663,7 +678,7 @@ function dotGraph(graph, current, options = {}) {
             const confidenceLabel = record.confidence && !["authoritative", "filename-and-session-bucket"].includes(record.confidence) ? record.confidence : undefined;
             const label = [`${edgeAgent} ${eventLabel}`, confidenceLabel].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
-            const color = eventLabel === "Branched" ? "#ef4444" : record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
+            const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : agentColor(edgeAgent);
             if (options.starts) {
                 const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
                 stateIds.push(stateId);
@@ -672,15 +687,15 @@ function dotGraph(graph, current, options = {}) {
                 lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
                 if (previousState)
                     lines.push(`  ${previousState} -> ${stateId} [label="later", style=dotted, color="#f59e0b"];`);
-                lines.push(`  ${stateId} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+                lines.push(`  ${stateId} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", fontcolor="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
                 previousState = stateId;
             }
             else {
-                lines.push(`  ${dotId(from.id)} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
+                lines.push(`  ${dotId(from.id)} -> ${dotId(to.id)} [label="${dotEscape(label)}", style="${style}", color="${color}", fontcolor="${color}", tooltip="${dotEscape(`${record.sourceSession} -> ${record.destinationSession}`)}"];`);
             }
         }
     }
-    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nbox dates show arrive/depart/active since\\nblue edge: moved\\ndashed edge: inferred move\\nred edge: branched\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\norange clusters are repos/containers\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#f97316\", fontcolor=\"#fdba74\"];");
     lines.push("}");
     return lines.join("\n");
 }
