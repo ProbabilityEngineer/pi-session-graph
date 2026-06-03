@@ -584,6 +584,38 @@ function dotGraph(graph, current, options = {}) {
         list.push(node);
         lanes.set(key, list);
     }
+    const incomingBySession = new Map();
+    const outgoingBySession = new Map();
+    for (const record of graph.records) {
+        if (!incomingBySession.has(record.destinationSession) || record.ts < (incomingBySession.get(record.destinationSession)?.ts ?? ""))
+            incomingBySession.set(record.destinationSession, record);
+        const out = outgoingBySession.get(record.sourceSession) ?? [];
+        out.push(record);
+        outgoingBySession.set(record.sourceSession, out);
+    }
+    const propagatedAgent = new Map();
+    for (const node of graph.nodes.values()) {
+        const label = agentLabel(node);
+        if (label)
+            propagatedAgent.set(node.path, label);
+    }
+    for (let pass = 0; pass < 8; pass++) {
+        let changed = false;
+        for (const record of graph.records) {
+            const fromAgent = propagatedAgent.get(record.sourceSession);
+            const toAgent = propagatedAgent.get(record.destinationSession);
+            if (fromAgent && !toAgent) {
+                propagatedAgent.set(record.destinationSession, fromAgent);
+                changed = true;
+            }
+            if (toAgent && !fromAgent) {
+                propagatedAgent.set(record.sourceSession, toAgent);
+                changed = true;
+            }
+        }
+        if (!changed)
+            break;
+    }
     let cluster = 0;
     const stateIds = [];
     for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -591,9 +623,15 @@ function dotGraph(graph, current, options = {}) {
         for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
             const currentMark = node.path === current ? " ★" : "";
             const repo = repoLabelForNode(node);
-            const agent = agentLabel(node);
+            const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
             const providerLabel = node.provider && node.provider !== "pi" ? `provider: ${node.provider}` : undefined;
-            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `session start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, providerLabel].filter(Boolean).join("\n");
+            const incoming = incomingBySession.get(node.path);
+            const outgoing = (outgoingBySession.get(node.path) ?? []).filter((record) => record.destinationSession !== node.path).sort((a, b) => a.ts.localeCompare(b.ts));
+            const activeOrArrivedLabel = outgoing[0]
+                ? incoming ? `arrived: ${incoming.ts.slice(0, 16)}` : node.timestamp ? `lineage start: ${node.timestamp.slice(0, 16)} (filename)` : undefined
+                : `active since: ${(incoming?.ts ?? node.timestamp ?? "unknown").slice(0, 16)}${incoming ? "" : " (filename)"}`;
+            const departedLabel = outgoing[0] ? `departed: ${outgoing[0].ts.slice(0, 16)}` : undefined;
+            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean).join("\n");
             const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
@@ -620,15 +658,16 @@ function dotGraph(graph, current, options = {}) {
             if (!to)
                 continue;
             const type = recordType(record);
-            const eventLabel = record.operationType === "session_relocation" ? "move" : record.mode ?? type;
-            const confidenceLabel = record.confidence && record.confidence !== "authoritative" ? record.confidence : undefined;
-            const label = [eventLabel, record.ts.slice(0, 16), confidenceLabel].filter(Boolean).join("\n");
+            const edgeAgent = agentLabel(from) ?? agentLabel(to) ?? propagatedAgent.get(record.sourceSession) ?? propagatedAgent.get(record.destinationSession) ?? "Agent";
+            const eventLabel = record.mode === "branch" || type === "branch" ? "Branched" : record.inferred || record.overlay || record.confidence !== "authoritative" ? "Inferred Move" : "Moved";
+            const confidenceLabel = record.confidence && !["authoritative", "filename-and-session-bucket"].includes(record.confidence) ? record.confidence : undefined;
+            const label = [`${edgeAgent} ${eventLabel}`, confidenceLabel].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
-            const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
+            const color = eventLabel === "Branched" ? "#ef4444" : record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
             if (options.starts) {
                 const stateId = `s_${shortHash(`${record.sourceSession}:${record.ts}:${record.id ?? type}`)}`;
                 stateIds.push(stateId);
-                const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, `source lines: ${from.lineCount ?? "?"}`].join("\n");
+                const stateLabel = [`state @ ${record.ts.slice(0, 16)}`, eventLabel].join("\n");
                 lines.push(`  ${stateId} [shape=diamond, label="${dotEscape(stateLabel)}", fillcolor="#78350f", color="#f59e0b"];`);
                 lines.push(`  ${dotId(from.id)} -> ${stateId} [label="progression", style=dotted, color="#f59e0b"];`);
                 if (previousState)
@@ -641,7 +680,7 @@ function dotGraph(graph, current, options = {}) {
             }
         }
     }
-    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nsolid edge: confirmed move/event\\ndashed edge: inferred/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nbox dates show arrive/depart/active since\\nblue edge: moved\\ndashed edge: inferred move\\nred edge: branched\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
     lines.push("}");
     return lines.join("\n");
 }
