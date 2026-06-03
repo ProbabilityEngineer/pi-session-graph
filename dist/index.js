@@ -657,7 +657,9 @@ function dotGraph(graph, current, options = {}) {
                 continue;
             const type = recordType(record);
             const edgeAgent = agentLabel(from) ?? agentLabel(to) ?? propagatedAgent.get(record.sourceSession) ?? propagatedAgent.get(record.destinationSession) ?? "Agent";
-            const eventLabel = record.mode === "branch" || type === "branch" ? "Branched" : record.inferred || record.overlay || record.confidence !== "authoritative" ? "Inferred Move" : "Moved";
+            const fanoutCount = new Set((outgoingBySession.get(record.sourceSession) ?? []).filter((edge) => edge.destinationSession !== record.sourceSession).map((edge) => edge.destinationSession)).size;
+            const isBranch = record.mode === "branch" || type === "branch" || fanoutCount > 1;
+            const eventLabel = isBranch ? "Branched" : record.inferred || record.overlay || record.confidence !== "authoritative" ? "Inferred Move" : "Moved";
             const confidenceLabel = record.confidence && !["authoritative", "filename-and-session-bucket"].includes(record.confidence) ? record.confidence : undefined;
             const label = [`${edgeAgent} ${eventLabel}`, confidenceLabel].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
