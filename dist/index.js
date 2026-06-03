@@ -589,12 +589,40 @@ function hslToHex(hue, saturation, lightness) {
     const [r, g, b] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
     return `#${[r, g, b].map((value) => Math.round((value + m) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
+function hexRgb(hex) {
+    const match = hex.match(/^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+    return match ? [parseInt(match[1], 16), parseInt(match[2], 16), parseInt(match[3], 16)] : [0, 0, 0];
+}
+function relativeLuminance(hex) {
+    const values = hexRgb(hex).map((channel) => {
+        const value = channel / 255;
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * values[0] + 0.7152 * values[1] + 0.0722 * values[2];
+}
+function contrastRatio(a, b) {
+    const [light, dark] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+    return (light + 0.05) / (dark + 0.05);
+}
+function safeAgentColor(baseHue, step) {
+    const avoid = ["#111827", "#3f2f12", "#334155"];
+    for (let attempt = 0; attempt < 12; attempt++) {
+        const hue = (baseHue + attempt * step / 2) % 360;
+        for (const lightness of [0.66, 0.72, 0.78, 0.6]) {
+            const color = hslToHex(hue, 0.78, lightness);
+            if (avoid.every((background) => contrastRatio(color, background) >= 3))
+                return color;
+        }
+    }
+    return hslToHex(baseHue, 0.82, 0.74);
+}
 function agentColorMap(agents) {
     const sorted = [...new Set([...agents].filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const map = new Map();
+    const step = 360 / Math.max(sorted.length, 1);
     const offset = 132;
     for (const [index, agent] of sorted.entries())
-        map.set(agent, hslToHex((offset + index * 360 / Math.max(sorted.length, 1)) % 360, 0.72, 0.62));
+        map.set(agent, safeAgentColor((offset + index * step) % 360, step));
     return map;
 }
 function agentColor(colors, agent) {
