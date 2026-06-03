@@ -592,7 +592,8 @@ function dotGraph(graph, current, options = {}) {
             const currentMark = node.path === current ? " ★" : "";
             const repo = repoLabelForNode(node);
             const agent = agentLabel(node);
-            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, node.provider].filter(Boolean).join("\n");
+            const providerLabel = node.provider && node.provider !== "pi" ? `provider: ${node.provider}` : undefined;
+            const labelLines = [agent ? `agent: ${agent}${currentMark}` : `session${currentMark}`, `repo: ${repo}`, node.timestamp ? `session start: ${node.timestamp.slice(0, 16)}` : undefined, `current lines: ${node.lineCount ?? "?"}`, providerLabel].filter(Boolean).join("\n");
             const fill = node.path === current ? "#312e81" : node.compactionCount ? "#3f2f12" : "#1e293b";
             if (options.starts && node.timestamp) {
                 const startId = `${dotId(node.id)}_start`;
@@ -620,7 +621,8 @@ function dotGraph(graph, current, options = {}) {
                 continue;
             const type = recordType(record);
             const eventLabel = record.operationType === "session_relocation" ? "move" : record.mode ?? type;
-            const label = [eventLabel, record.ts.slice(0, 16), record.confidence].filter(Boolean).join("\n");
+            const confidenceLabel = record.confidence && record.confidence !== "authoritative" ? record.confidence : undefined;
+            const label = [eventLabel, record.ts.slice(0, 16), confidenceLabel].filter(Boolean).join("\n");
             const style = record.inferred || record.overlay || record.confidence === "low" ? "dashed" : record.edgeType === "compaction" ? "bold" : "solid";
             const color = record.edgeType === "compaction" ? "#eab308" : record.status === "contested" ? "#f97316" : record.status === "obsolete" ? "#ef4444" : "#60a5fa";
             if (options.starts) {
@@ -639,7 +641,7 @@ function dotGraph(graph, current, options = {}) {
             }
         }
     }
-    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nclusters: cwd/repo lanes\\nsolid: explicit/authoritative\\ndashed: inferred/overlay/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\nsolid edge: confirmed move/event\\ndashed edge: inferred/low confidence\\nbold yellow: compaction\\n★ current session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
     lines.push("}");
     return lines.join("\n");
 }
