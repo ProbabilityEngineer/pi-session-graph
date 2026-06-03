@@ -200,6 +200,17 @@ function cwdLabel(cwd: string) {
 	return basename(cwd) || cwd;
 }
 
+function normalizeRepoPath(path: string) {
+	return path
+		.replace(/^\/users\/sam\//, "/Users/sam/")
+		.replace(/^\/Users\/sam\/(?:Users|users)\/sam\//, "/Users/sam/")
+		.replace(/^\/Users\/sam\/users-sam-git-agents-/, "/Users/sam/git/agents/")
+		.replace(/^users-sam-git-agents-/, "/Users/sam/git/agents/")
+		.replace(/^\/Users\/sam\/users-sam-git-/, "/Users/sam/git/")
+		.replace(/^users-sam-git-/, "/Users/sam/git/")
+		.replace(/^users-sam-/, "/Users/sam/");
+}
+
 function bucketLabel(path: string) {
 	const bucket = path.match(/\/sessions\/--(.+?)--\//)?.[1];
 	if (!bucket) return undefined;
@@ -215,14 +226,16 @@ function bucketLabel(path: string) {
 	];
 	for (const [pattern, format] of rules) {
 		const match = bucket.match(pattern);
-		if (match) return format(match);
+		if (match) return normalizeRepoPath(format(match));
 	}
-	return bucket;
+	return normalizeRepoPath(bucket);
 }
 
 function repoLabelForNode(node: SessionNode) {
-	if (node.cwd && node.cwd.startsWith("/")) return cwdLabel(node.cwd);
-	return bucketLabel(node.path) ?? (node.cwd && !node.cwd.startsWith("(") ? node.cwd : undefined) ?? node.label ?? "unknown";
+	if (node.cwd && node.cwd.startsWith("/")) return normalizeRepoPath(node.cwd);
+	const bucket = bucketLabel(node.path);
+	if (bucket?.startsWith("/")) return bucket;
+	return bucket ?? (node.cwd && !node.cwd.startsWith("(") ? node.cwd : undefined) ?? node.label ?? "unknown";
 }
 
 function pathLabel(cwd: string | undefined, path: string) {
@@ -784,7 +797,25 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 			}
 		}
 	}
-	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+	const nodesByAgent = new Map<string, SessionNode[]>();
+	for (const node of graph.nodes.values()) {
+		const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
+		if (!agent) continue;
+		const list = nodesByAgent.get(agent) ?? [];
+		list.push(node);
+		nodesByAgent.set(agent, list);
+	}
+	for (const [agent, nodes] of nodesByAgent) {
+		const ordered = nodes.sort((a, b) => {
+			const aTime = incomingBySession.get(a.path)?.ts ?? a.timestamp ?? "";
+			const bTime = incomingBySession.get(b.path)?.ts ?? b.timestamp ?? "";
+			return aTime.localeCompare(bTime) || a.id.localeCompare(b.id);
+		});
+		for (let index = 1; index < ordered.length; index++) {
+			lines.push(`  ${dotId(ordered[index - 1].id)} -> ${dotId(ordered[index].id)} [style=invis, weight=4, constraint=true, tooltip="${dotEscape(`${agent} chronological layout constraint`)}"];`);
+		}
+	}
+	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nleft-to-right is edge + per-agent time constrained\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
 	lines.push("}");
 	return lines.join("\n");
 }
