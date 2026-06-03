@@ -1441,74 +1441,6 @@ async function writeHotspotReports(reportDir: string, graph: Graph, stamp: strin
 
 
 
-function nodeStartMs(node: SessionNode) {
-	const value = typeof node.metadata?.startTimestamp === "string" ? node.metadata.startTimestamp : node.timestamp;
-	const parsed = Date.parse(value ?? "");
-	return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function nodeEndMs(node: SessionNode) {
-	const value = typeof node.metadata?.endTimestamp === "string" ? node.metadata.endTimestamp : node.timestamp;
-	const parsed = Date.parse(value ?? "");
-	return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function formatDuration(ms: number) {
-	const hours = ms / 3600000;
-	if (hours < 48) return `${hours.toFixed(1)}h`;
-	return `${(hours / 24).toFixed(1)}d`;
-}
-
-function standaloneWorkIslands(graph: Graph) {
-	const moved = new Set<string>();
-	for (const record of graph.records) {
-		if (record.sourceSession === record.destinationSession) continue;
-		moved.add(record.sourceSession);
-		moved.add(record.destinationSession);
-	}
-	return [...graph.nodes.values()]
-		.filter((node) => !moved.has(node.path))
-		.map((node) => {
-			const start = nodeStartMs(node);
-			const end = nodeEndMs(node);
-			const durationMs = start != null && end != null && end >= start ? end - start : 0;
-			return { node, repo: repoLabelForNode(node), durationMs, compactions: node.compactionCount ?? 0 };
-		})
-		.filter((item) => item.durationMs >= 6 * 3600000 || item.compactions >= 2)
-		.sort((a, b) => b.durationMs - a.durationMs || b.compactions - a.compactions || a.repo.localeCompare(b.repo));
-}
-
-function standaloneWorkDot(graph: Graph) {
-	const islands = standaloneWorkIslands(graph).slice(0, 80);
-	const lines = [
-		"digraph StandaloneWorkIslands {",
-		"  graph [rankdir=LR, bgcolor=\"#111827\", pad=0.35, nodesep=0.45, ranksep=0.8, splines=true, overlap=false];",
-		"  node [shape=box, style=\"rounded,filled\", fontname=\"Helvetica\", fontsize=10, color=\"#64748b\", fillcolor=\"#1e293b\", fontcolor=\"#e5e7eb\"];",
-		"  edge [style=invis];",
-	];
-	const byRepo = new Map<string, typeof islands>();
-	for (const item of islands) {
-		const list = byRepo.get(item.repo) ?? [];
-		list.push(item);
-		byRepo.set(item.repo, list);
-	}
-	let cluster = 0;
-	for (const [repo, items] of [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-		lines.push(`  subgraph cluster_standalone_${cluster++} {`, `    label="${dotEscape(`repo: ${repo}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
-		for (const item of items) {
-			const agent = agentLabel(item.node);
-			const start = nodeStartMs(item.node);
-			const end = nodeEndMs(item.node);
-			const label = [agent ? `agent: ${agent}` : "standalone session", `repo: ${item.repo}`, start != null && end != null ? `span: ${new Date(start).toISOString().slice(0, 16)} → ${new Date(end).toISOString().slice(0, 16)}` : undefined, `duration span: ${formatDuration(item.durationMs)}`, item.compactions ? `compactions: ${item.compactions}` : undefined, "no recorded moves"].filter(Boolean).join("\n");
-			lines.push(`    ${dotId(item.node.id)} [label="${dotEscape(label)}", tooltip="${dotEscape(item.node.path)}"];`);
-		}
-		lines.push("  }");
-	}
-	lines.push("  legend [shape=note, label=\"Standalone work islands\\nNo recorded movement edges\\nRanked by event span + compactions\\nSpan is first→last event, not active work time\", fillcolor=\"#0f172a\", color=\"#475569\"];");
-	lines.push("}");
-	return lines.join("\n");
-}
-
 function filteredProjectGraph(graph: Graph, repo: string) {
 	const records = graph.records.filter((record) => repoKeyForPath(graph, record.sourceSession, record.fromCwd) === repo || repoKeyForPath(graph, record.destinationSession, record.toCwd) === repo);
 	return graphCloneWithRecords(graph, records);
@@ -1584,13 +1516,12 @@ async function writeReportPack(graph: Graph, current?: string) {
 	await writeFile(join(archiveDir, "raw-graph-data.json"), JSON.stringify(graphExportData(graph), null, 2) + "\n");
 	artifacts.push({ title: "Raw graph data JSON", path: join(archiveDir, "raw-graph-data.json"), description: "Metadata-only graph snapshot used by the reports." });
 	await addDot("Repo jump map", "Weighted repo/project transition graph; edges with weight 2+ only.", reportDir, "02-repo-jump-map", repoJumpDot(graph, 2));
-	await addDot("Standalone work islands", "Long standalone projects/sessions with no recorded movement edges, ranked by event span and compactions.", reportDir, "04-standalone-work-islands", standaloneWorkDot(graph));
-	await addDot("Meaningful lineage forest", "Connected meaningful chains; isolated and zero-line dead-end noise filtered.", reportDir, "05-meaningful-lineage-forest", dotGraph(meaningfulLineageGraph(graph), current));
+	await addDot("Meaningful lineage forest", "Connected meaningful chains; isolated and zero-line dead-end noise filtered.", reportDir, "04-meaningful-lineage-forest", dotGraph(meaningfulLineageGraph(graph), current));
 	const focusedGraph = rebuildGraph(graph, graph.records.filter(isFocusedLineageRecord));
-	const lineageFullPath = join(reportDir, "06-lineage-full-interactive.html");
-	const lineageFocusedPath = join(reportDir, "07-lineage-focused-interactive.html");
-	const timelineProjectsPath = join(reportDir, "08-timeline-projects.html");
-	const timelineSessionsPath = join(reportDir, "09-timeline-sessions.html");
+	const lineageFullPath = join(reportDir, "05-lineage-full-interactive.html");
+	const lineageFocusedPath = join(reportDir, "06-lineage-focused-interactive.html");
+	const timelineProjectsPath = join(reportDir, "07-timeline-projects.html");
+	const timelineSessionsPath = join(reportDir, "08-timeline-sessions.html");
 	await writeHtmlViewer(reportDir, graph, { title: `${stamp} — Lineage Full Interactive`, outputPath: lineageFullPath });
 	await writeHtmlViewer(reportDir, focusedGraph, { title: `${stamp} — Lineage Focused Interactive`, outputPath: lineageFocusedPath });
 	await writeTemporalHtml(reportDir, graph, timelineProjectsPath, `${stamp} — Timeline Projects`, "label");
@@ -1609,7 +1540,7 @@ async function writeReportPack(graph: Graph, current?: string) {
 	const readmePath = join(root, "README.md");
 	const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Recommended reading order: hotspots, repo jump map, false starts, meaningful lineage forest, focused interactive views, archive only when reconstructing history.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Artifacts</h2><ol>${artifacts.map((a) => `<li><a href="${escapeHtml(rel(a.path))}">${escapeHtml(a.title)}</a><br/><span class="muted">${escapeHtml(a.description)}</span></li>`).join("\n")}</ol></div>`;
 	await writeFile(indexPath, reportShell(`${stamp} — Session Graph Report Index`, indexBody));
-	await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-standalone-work-islands.svg`, `5. reports/05-meaningful-lineage-forest.svg`, `6. reports/06-lineage-full-interactive.html and later files`, `7. reports/09-project-focus-index.html`, `8. reports/11-chart-timeline-projects.html`, `9. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
+	await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-meaningful-lineage-forest.svg`, `5. reports/05-lineage-full-interactive.html and later files`, `6. reports/09-project-focus-index.html`, `7. reports/11-chart-timeline-projects.html`, `8. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
 	return { root, indexPath, readmePath, artifacts };
 }
 
