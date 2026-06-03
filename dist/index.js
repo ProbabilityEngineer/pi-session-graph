@@ -682,27 +682,9 @@ function dotGraph(graph, current, options = {}) {
             break;
     }
     const colors = agentColorMap(propagatedAgent.values());
-    const branchCountByAgent = new Map();
-    for (const [source, records] of outgoingBySession) {
-        const fanout = new Set(records.filter((edge) => edge.destinationSession !== source).map((edge) => edge.destinationSession)).size;
-        if (fanout <= 1)
-            continue;
-        const agent = propagatedAgent.get(source);
-        if (agent)
-            branchCountByAgent.set(agent, (branchCountByAgent.get(agent) ?? 0) + fanout);
-    }
-    const laneScore = ([, nodes]) => Math.max(0, ...nodes.map((node) => branchCountByAgent.get(agentLabel(node) ?? propagatedAgent.get(node.path) ?? "") ?? 0));
-    const sortedLanes = [...lanes.entries()].sort((a, b) => laneScore(b) - laneScore(a) || a[0].localeCompare(b[0]));
-    const centeredLanes = [];
-    for (const lane of sortedLanes) {
-        if (centeredLanes.length % 2)
-            centeredLanes.unshift(lane);
-        else
-            centeredLanes.push(lane);
-    }
     let cluster = 0;
     const stateIds = [];
-    for (const [label, nodes] of centeredLanes) {
+    for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
         lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
         for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
             const repo = repoLabelForNode(node);
@@ -785,7 +767,7 @@ function dotGraph(graph, current, options = {}) {
             lines.push(`  ${dotId(ordered[index - 1].id)} -> ${dotId(ordered[index].id)} [style=invis, weight=4, constraint=true, tooltip="${dotEscape(`${agent} chronological layout constraint`)}"];`);
         }
     }
-    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nbranch-heavy lineages are emitted toward center rows\\nleft-to-right is edge + per-agent time constrained\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
+    lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nleft-to-right is edge + per-agent time constrained\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
     lines.push("}");
     return lines.join("\n");
 }
