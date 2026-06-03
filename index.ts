@@ -725,7 +725,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 	let cluster = 0;
 	const stateIds: string[] = [];
 	for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-		lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#f97316\";", "    fontcolor=\"#fdba74\";", "    style=\"rounded,dashed\";");
+		lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
 		for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
 			const repo = repoLabelForNode(node);
 			const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
@@ -737,7 +737,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 				: `active since: ${(incoming?.ts ?? node.timestamp ?? "unknown").slice(0, 16)}${incoming ? "" : " (filename)"}`;
 			const departedLabel = outgoing[0] ? `departed: ${outgoing[0].ts.slice(0, 16)}` : undefined;
 			const labelLines = [agent ? `agent: ${agent}` : "session", `repo: ${repo}`, activeOrArrivedLabel, departedLabel, providerLabel].filter(Boolean) as string[];
-			const fill = "#1e293b";
+			const fill = "#3f2f12";
 			const nodeAgentColor = agentColor(agent);
 			if (options.starts && node.timestamp) {
 				const startId = `${dotId(node.id)}_start`;
@@ -784,7 +784,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 			}
 		}
 	}
-	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\norange clusters are repos/containers\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#f97316\", fontcolor=\"#fdba74\"];");
+	lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
 	lines.push("}");
 	return lines.join("\n");
 }
