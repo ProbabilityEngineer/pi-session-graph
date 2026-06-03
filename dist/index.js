@@ -764,7 +764,7 @@ function dotGraph(graph, current, options = {}) {
             return aTime.localeCompare(bTime) || a.id.localeCompare(b.id);
         });
         for (let index = 1; index < ordered.length; index++) {
-            lines.push(`  ${dotId(ordered[index - 1].id)} -> ${dotId(ordered[index].id)} [style=invis, weight=4, constraint=true, tooltip="${dotEscape(`${agent} chronological layout constraint`)}"];`);
+            lines.push(`  ${dotId(ordered[index - 1].id)} -> ${dotId(ordered[index].id)} [style=invis, weight=1, constraint=true, tooltip="${dotEscape(`${agent} chronological layout constraint`)}"];`);
         }
     }
     lines.push("  legend [shape=note, label=\"Graphviz lineage export\\nrepo clusters are containers\\norange boxes are sessions/visits\\nleft-to-right is edge + per-agent time constrained\\nagent names and movement edges share lineage color\\ndashed edge: inferred move\\nBranched label: fan-out from one session\", fillcolor=\"#0f172a\", color=\"#475569\"];");
