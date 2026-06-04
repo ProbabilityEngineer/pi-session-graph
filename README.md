@@ -77,11 +77,12 @@ Graph report packs are written to timestamped folders:
     01-hotspots.html
     02-repo-jump-map.dot/.svg
     03-false-starts.html
-    04-meaningful-lineage-forest.dot/.svg
-    05-lineage-full-interactive.html
-    06-lineage-focused-interactive.html
-    07-timeline-projects.html
-    08-timeline-sessions.html
+    04-active-hours.html
+    05-meaningful-lineage-forest.dot/.svg
+    06-lineage-full-interactive.html
+    07-lineage-focused-interactive.html
+    08-timeline-projects.html
+    09-timeline-sessions.html
     09-project-focus-index.html
     11-chart-timeline-projects.html
     12-chart-timeline-sessions.html

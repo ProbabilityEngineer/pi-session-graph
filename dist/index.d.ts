@@ -92,6 +92,12 @@ type GenericEdge = {
     metadata?: Record<string, unknown>;
     evidence?: unknown;
 };
+type MetricMetadata = Record<string, unknown> & {
+    timestampCoverage?: Record<string, unknown>;
+    visitRowMetrics?: Record<string, unknown>;
+    activeTime?: Record<string, unknown>;
+    rowMetrics?: Record<string, unknown>;
+};
 type StoreExport = {
     nodes?: GenericNode[];
     sessions?: {
@@ -103,7 +109,7 @@ type StoreExport = {
         endTimestamp?: string;
         lineCount?: number;
         byteCount?: number;
-        metadata?: {
+        metadata?: MetricMetadata & {
             cwd?: string;
             displayName?: string;
             provider?: string;
@@ -123,7 +129,7 @@ type StoreExport = {
         batchId?: string;
         sourceRepo?: string;
         targetRepo?: string;
-        metadata?: {
+        metadata?: MetricMetadata & {
             fromCwd?: string;
             toCwd?: string;
             manifestIndex?: number;
@@ -224,6 +230,11 @@ type StoreExport = {
         lineCount?: number;
         byteCount?: number;
         activityScore?: number;
+        activeMinutes?: number;
+        activeHours?: number;
+        workBlockCount?: number;
+        visitRows?: number;
+        metricConfidence?: string;
         confidence?: string;
         provenance?: string;
     }[];
@@ -238,6 +249,20 @@ type StoreExport = {
         confidence?: string;
         provenance?: string;
     }[];
+    activeTimeMetrics?: {
+        id: string;
+        project?: string;
+        activeMinutes?: number;
+        activeHours?: number;
+        workBlockCount?: number;
+        sessionCount?: number;
+        sessionIds?: string[];
+        providers?: string[];
+        idleThresholdMinutes?: number;
+        confidence?: string;
+        provenance?: string;
+        metadata?: Record<string, unknown>;
+    }[];
     activityMetrics?: {
         id: string;
         provider?: string;
@@ -249,6 +274,10 @@ type StoreExport = {
         lineCount?: number;
         byteCount?: number;
         activityScore?: number;
+        activeMinutes?: number;
+        activeHours?: number;
+        workBlockCount?: number;
+        visitRows?: number;
         firstStart?: string;
         lastEnd?: string;
         confidence?: string;
@@ -306,6 +335,7 @@ type Graph = {
     compactionEvents?: StoreExport["compactionEvents"];
     temporalActivitySpans?: StoreExport["temporalActivitySpans"];
     workBursts?: StoreExport["workBursts"];
+    activeTimeMetrics?: StoreExport["activeTimeMetrics"];
     activityMetrics?: StoreExport["activityMetrics"];
 };
 declare function sessionId(path: string): string;
