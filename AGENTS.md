@@ -11,8 +11,3 @@
 - Use explicit manifests and sidecar indexes first; do not mutate Pi session JSONLs in v1.
 - Human names and lineage names are curated labels, not proof of identity.
 - Preserve privacy: do not dump raw transcript content into prompts or reports.
-
-## Turnlog
-
-- When you attempt to use turnlog for meaningful repository work and the target repo is not initialized, initialize it rather than abandoning the record.
-- Keep `.turnlog/` out of GitHub by default unless the repo explicitly opts into tracking it.
