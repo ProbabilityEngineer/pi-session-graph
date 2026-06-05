@@ -31,7 +31,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "dependencies": {
-    "agent-session-store": "github:ProbabilityEngineer/agent-session-store"
+    "agent-session-store": "github:ProbabilityEngineer/agent-session-store#v0.1.8"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "latest",
