@@ -1500,8 +1500,72 @@ function derivedActiveTimeMetrics(graph: Graph) {
 	return [...byProject.values()].map((item) => ({ ...item, repoIdentityId: undefined as string | undefined, activeHours: +(item.activeMinutes / 60).toFixed(2), providers: [...item.providers].sort(), contributingPaths: [...item.contributingPaths].sort() }));
 }
 
+type ProjectMetricSummary = {
+	project: string;
+	displayName: string;
+	activeMinutes: number;
+	activeHours: number;
+	workBlockCount: number;
+	sessionCount: number;
+	providers: string[];
+	contributingPaths: string[];
+	confidence: string;
+	repoIdentityId?: string;
+	coverageWarnings: string[];
+	excludedSessionIds: string[];
+	rawIntervalCount?: number;
+	collapsedIntervalCount?: number;
+	status: "complete" | "partial" | "undercount-risk" | "overcount-risk";
+	statusLabel: string;
+	statusColor: string;
+};
+
+function stringArray(value: unknown) {
+	return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function numberValue(value: unknown) {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function projectMetricStatus(summary: Pick<ProjectMetricSummary, "coverageWarnings" | "excludedSessionIds" | "confidence">) {
+	if (summary.excludedSessionIds.length) return { status: "overcount-risk", statusLabel: "overcount risk", statusColor: "#f97316" } as const;
+	if (summary.coverageWarnings.length) return { status: "undercount-risk", statusLabel: "undercount risk", statusColor: "#facc15" } as const;
+	if (summary.confidence === "low") return { status: "partial", statusLabel: "partial", statusColor: "#a78bfa" } as const;
+	return { status: "complete", statusLabel: "complete", statusColor: "#22c55e" } as const;
+}
+
+function summarizeProjectMetrics(graph: Graph) {
+	const metrics = (graph.activeTimeMetrics?.length ? graph.activeTimeMetrics : derivedActiveTimeMetrics(graph)) ?? [];
+	return [...metrics].map((metric) => {
+		const metadata = "metadata" in metric ? metricObject(metric.metadata) : undefined;
+		const coverageWarnings = stringArray(metadata?.coverageWarnings);
+		const excludedSessionIds = stringArray(metadata?.excludedSessionIds);
+		const rawIntervalCount = numberValue(metadata?.rawIntervalCount);
+		const collapsedIntervalCount = Array.isArray(metadata?.collapsedIntervals) ? metadata.collapsedIntervals.length : undefined;
+		const confidence = String(metric.confidence ?? metadata?.confidence ?? "derived");
+		return {
+			project: metric.project ?? "unknown",
+			displayName: projectLabelForMetric(graph, metric),
+			activeMinutes: metric.activeMinutes ?? 0,
+			activeHours: metric.activeHours ?? +(((metric.activeMinutes ?? 0) / 60).toFixed(2)),
+			workBlockCount: metric.workBlockCount ?? 0,
+			sessionCount: metric.sessionCount ?? 0,
+			providers: (metric.providers ?? []).map(String).sort(),
+			contributingPaths: (metric.contributingPaths ?? []).map(String).sort(),
+			confidence,
+			repoIdentityId: metric.repoIdentityId,
+			coverageWarnings,
+			excludedSessionIds,
+			rawIntervalCount,
+			collapsedIntervalCount,
+			...projectMetricStatus({ coverageWarnings, excludedSessionIds, confidence }),
+		} satisfies ProjectMetricSummary;
+	}).sort((a, b) => b.activeMinutes - a.activeMinutes);
+}
+
 async function writeActiveHoursReport(reportDir: string, graph: Graph, stamp: string) {
-	const metrics = [...((graph.activeTimeMetrics?.length ? graph.activeTimeMetrics : derivedActiveTimeMetrics(graph)) ?? [])].sort((a, b) => (b.activeMinutes ?? 0) - (a.activeMinutes ?? 0));
+	const metrics = summarizeProjectMetrics(graph);
 	const byAgent = new Map<string, { agent: string; activeMinutes: number; sessions: number; providers: Set<string> }>();
 	for (const node of graph.nodes.values()) {
 		const active = metricObject(node.metadata?.activeTime);
@@ -1516,7 +1580,7 @@ async function writeActiveHoursReport(reportDir: string, graph: Graph, stamp: st
 	}
 	const agentRows = [...byAgent.values()].sort((a, b) => b.activeMinutes - a.activeMinutes).slice(0, 50);
 	const path = join(reportDir, "04-active-hours.html");
-	await writeFile(path, reportShell(`${stamp} — Active Hours`, `<p>Estimated active work time from event timestamp gaps, bounded by reconstructed visit rows when available. This is not calendar span. Idle threshold is exported by the store, usually 30 minutes. No transcript content is included.</p><div class="card"><h2>Top projects by active time</h2>${tableHtml(["project","active","blocks","sessions","providers","confidence","aliases / contributing paths"], metrics.slice(0, 100).map((m) => [m.displayName ?? repoIdentityDisplay(graph, m.repoIdentityId) ?? m.project ?? "unknown", formatHours(m.activeMinutes, m.activeHours), m.workBlockCount ?? "", m.sessionCount ?? "", (m.providers ?? []).join(", "), m.confidence ?? "", (m.contributingPaths ?? []).map(shortPath).join("; ")]))}</div><div class="card"><h2>Top agents/lineages by active time</h2>${tableHtml(["agent/lineage","active","sessions","providers"], agentRows.map((row) => [row.agent, formatHours(row.activeMinutes), row.sessions, [...row.providers].sort().join(", ")]))}</div>`));
+	await writeFile(path, reportShell(`${stamp} — Active Hours`, `<p>Estimated active work time from event timestamp gaps, bounded by reconstructed visit rows when available. This is not calendar span. Idle threshold is exported by the store, usually 30 minutes. No transcript content is included.</p><div class="card"><h2>Confidence legend</h2><ul><li><strong>complete</strong>: no known coverage or copied-history warnings in the exported aggregate.</li><li><strong>partial</strong>: lower-confidence estimate even without a specific warning.</li><li><strong>undercount risk</strong>: missing timestamped history means active hours are known to be incomplete.</li><li><strong>overcount risk</strong>: copied/overlapping history required exclusions to avoid inflated totals.</li></ul><p class="muted">Totals are timestamp-backed estimates, not guaranteed lifetime effort.</p></div><div class="card"><h2>Top projects by active time</h2>${tableHtml(["project","active","status","blocks","sessions","providers","warnings / exclusions","aliases / contributing paths"], metrics.slice(0, 100).map((m) => [m.displayName, formatHours(m.activeMinutes, m.activeHours), `${m.statusLabel} (${m.confidence})`, m.workBlockCount, m.sessionCount, m.providers.join(", "), [`${m.coverageWarnings.length} warnings`, m.excludedSessionIds.length ? `${m.excludedSessionIds.length} excluded` : "", m.rawIntervalCount != null ? `${m.rawIntervalCount} raw intervals` : "", m.collapsedIntervalCount != null ? `${m.collapsedIntervalCount} collapsed` : ""].filter(Boolean).join(" · "), m.contributingPaths.map(shortPath).join("; ")]))}</div><div class="card"><h2>Top agents/lineages by active time</h2>${tableHtml(["agent/lineage","active","sessions","providers"], agentRows.map((row) => [row.agent, formatHours(row.activeMinutes), row.sessions, [...row.providers].sort().join(", ")]))}</div>`));
 	return { title: "Active hours: top projects and agents", path, description: "Estimated active work time from timestamp gaps." } satisfies ReportArtifact;
 }
 
@@ -1576,12 +1640,14 @@ async function writeFocusReports(reportDir: string, graph: Graph, stamp: string)
 }
 
 function projectTimelineRows(graph: Graph) {
-	const rows: { project: string; start: string; end: string; activeHours: number; provider: string; sessionId: string; contributingPath?: string; confidence?: string }[] = [];
+	const rows: { project: string; start: string; end: string; activeHours: number; provider: string; sessionId: string; contributingPath?: string; confidence?: string; status?: ProjectMetricSummary["status"]; statusLabel?: string; statusColor?: string; coverageWarnings?: string[]; excludedSessionIds?: string[]; rawIntervalCount?: number; collapsedIntervalCount?: number }[] = [];
+	const metricSummary = new Map(summarizeProjectMetrics(graph).map((metric) => [metric.displayName, metric]));
 	for (const span of graph.temporalActivitySpans ?? []) {
 		const start = span.start ?? "";
 		const end = span.end ?? span.start ?? "";
 		if (!start || !timeValue(start)) continue;
 		const project = displayProjectLabel(repoIdentityDisplay(graph, (span as { repoIdentityId?: string }).repoIdentityId) ?? span.cwd ?? span.label ?? span.provider ?? "unknown");
+		const summary = metricSummary.get(project);
 		rows.push({
 			project,
 			start,
@@ -1590,7 +1656,14 @@ function projectTimelineRows(graph: Graph) {
 			provider: span.provider ?? "unknown",
 			sessionId: span.sessionId ?? span.id,
 			contributingPath: span.cwd,
-			confidence: span.metricConfidence ?? span.confidence ?? "derived",
+			confidence: span.metricConfidence ?? span.confidence ?? summary?.confidence ?? "derived",
+			status: summary?.status,
+			statusLabel: summary?.statusLabel,
+			statusColor: summary?.statusColor,
+			coverageWarnings: summary?.coverageWarnings,
+			excludedSessionIds: summary?.excludedSessionIds,
+			rawIntervalCount: summary?.rawIntervalCount,
+			collapsedIntervalCount: summary?.collapsedIntervalCount,
 		});
 	}
 	if (rows.length) return rows;
@@ -1600,7 +1673,9 @@ function projectTimelineRows(graph: Graph) {
 		const start = String(active?.firstWorkedAt ?? node.metadata?.startTimestamp ?? node.timestamp ?? "");
 		const end = String(active?.lastWorkedAt ?? node.metadata?.endTimestamp ?? node.timestamp ?? start);
 		if (!start || !timeValue(start)) continue;
-		rows.push({ project: displayProjectLabel(repoLabelForNode(node, graph)), start, end: timeValue(end) ? end : start, activeHours: minutes != null ? +(minutes / 60).toFixed(2) : 0, provider: node.provider ?? "unknown", sessionId: node.id, contributingPath: node.cwd, confidence: String(active?.confidence ?? node.confidence ?? "derived") });
+		const project = displayProjectLabel(repoLabelForNode(node, graph));
+		const summary = metricSummary.get(project);
+		rows.push({ project, start, end: timeValue(end) ? end : start, activeHours: minutes != null ? +(minutes / 60).toFixed(2) : 0, provider: node.provider ?? "unknown", sessionId: node.id, contributingPath: node.cwd, confidence: String(active?.confidence ?? node.confidence ?? summary?.confidence ?? "derived"), status: summary?.status, statusLabel: summary?.statusLabel, statusColor: summary?.statusColor, coverageWarnings: summary?.coverageWarnings, excludedSessionIds: summary?.excludedSessionIds, rawIntervalCount: summary?.rawIntervalCount, collapsedIntervalCount: summary?.collapsedIntervalCount });
 	}
 	return rows;
 }
@@ -1637,30 +1712,22 @@ function weeklyProjectRows(graph: Graph) {
 
 async function writeProjectVisualizations(reportDir: string, graph: Graph, stamp: string) {
 	const timelineRows = collapsedProjectTimelineRows(graph).sort((a, b) => a.start.localeCompare(b.start));
-	const metricTotals = new Map<string, { name: string; value: number; paths: Set<string>; providers: Set<string>; confidence: Set<string> }>();
-	for (const row of timelineRows) {
-		const item = metricTotals.get(row.project) ?? { name: row.project, value: 0, paths: new Set<string>(), providers: new Set<string>(), confidence: new Set<string>() };
-		item.value += row.activeHours;
-		if (row.contributingPath) for (const p of row.contributingPath.split("; ").filter(Boolean)) item.paths.add(p);
-		if (row.provider) item.providers.add(row.provider);
-		if (row.confidence) item.confidence.add(row.confidence);
-		metricTotals.set(row.project, item);
-	}
-	const metricRows = [...metricTotals.values()].map((item) => ({ name: item.name, value: +item.value.toFixed(2), paths: [...item.paths].sort(), providers: [...item.providers].sort(), confidence: [...item.confidence].sort().join(", ") })).sort((a, b) => b.value - a.value);
+	const metricRows = summarizeProjectMetrics(graph).map((item) => ({ name: item.displayName, value: +item.activeHours.toFixed(2), paths: item.contributingPaths.map(shortPath), providers: item.providers, confidence: item.confidence, status: item.status, statusLabel: item.statusLabel, color: item.statusColor, coverageWarnings: item.coverageWarnings, excludedSessionIds: item.excludedSessionIds, rawIntervalCount: item.rawIntervalCount, collapsedIntervalCount: item.collapsedIntervalCount })).sort((a, b) => b.value - a.value);
+	const projectMeta = Object.fromEntries(metricRows.map((row) => [row.name, row]));
+	const weekly = weeklyProjectRows(graph).map((row) => ({ ...row, ...(projectMeta[row.project] ?? {}) }));
 	const ganttPath = join(reportDir, "13-project-gantt.html");
 	const areaPath = join(reportDir, "14-weekly-project-area.html");
 	const treemapPath = join(reportDir, "15-project-treemap.html");
 	const ganttData = JSON.stringify(timelineRows).replace(/</g, "\\u003c");
-	const weekly = weeklyProjectRows(graph);
 	const weeklyData = JSON.stringify(weekly).replace(/</g, "\\u003c");
 	const treemapData = JSON.stringify(metricRows).replace(/</g, "\\u003c");
-	await writeFile(ganttPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Gantt</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Gantt</h1><p class="muted">Canonical projects on rows, time on the x-axis, bar width by session span, tooltip includes active hours and contributing path. Active-hour totals are from imported timestamp metadata only; projects with missing external/archive event timing are undercounted.</p></header><div id="chart"></div><script>const raw=${ganttData};const cats=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.activeHours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.activeHours,0));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.project+'<br>'+r.start+' → '+r.end+'<br>active: '+r.activeHours+'h<br>provider: '+r.provider+'<br>'+ (r.contributingPath||'')}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:220,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},encode:{x:[0,1],y:2},data:raw.map(r=>[r.start,r.end,r.project])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
-	await writeFile(areaPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Weekly Project Area</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Weekly Project Area</h1><p class="muted">Weekly available active hours by canonical project. Useful for seeing which projects dominated each period, but undercounts projects whose historical external/archive events lack usable timestamps.</p></header><div id="chart"></div><script>const raw=${weeklyData};const weeks=[...new Set(raw.map(r=>r.week))].sort();const projects=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.hours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.hours,0)).slice(0,12);const series=projects.map(name=>({name,type:'line',stack:'hours',areaStyle:{},smooth:true,data:weeks.map(w=>{const row=raw.find(r=>r.project===name&&r.week===w);return row?row.hours:0})}));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{trigger:'axis'},legend:{top:8,textStyle:{color:'#cbd5e1'}},grid:{left:60,right:40,top:60,bottom:80},xAxis:{type:'category',data:weeks,axisLabel:{color:'#cbd5e1',rotate:45}},yAxis:{type:'value',axisLabel:{color:'#cbd5e1',formatter:v=>v+'h'}},series});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
-	await writeFile(treemapPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Treemap</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Treemap</h1><p class="muted">Overall allocation of available active hours. Size shows imported timestamp-backed effort, not guaranteed lifetime effort; projects with missing external/archive event timing are undercounted.</p></header><div id="chart"></div><script>const raw=${treemapData};const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const d=p.data;return d.name+'<br>active: '+d.value+'h<br>providers: '+(d.providers||[]).join(', ')+'<br>'+((d.paths||[]).join('<br>'))}},series:[{type:'treemap',roam:false,breadcrumb:{show:false},label:{color:'#e5e7eb'},itemStyle:{borderColor:'#111827'},data:raw}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+	await writeFile(ganttPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Gantt</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:.5rem}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:999px;display:inline-block}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Gantt</h1><p class="muted">Canonical projects on rows, time on the x-axis, bar width by session span, tooltip includes confidence and exported warnings. Active-hour totals are timestamp-backed estimates, not guaranteed lifetime effort.</p><div class="legend"><span><i class="swatch" style="background:#22c55e"></i>complete</span><span><i class="swatch" style="background:#a78bfa"></i>partial</span><span><i class="swatch" style="background:#facc15"></i>undercount risk</span><span><i class="swatch" style="background:#f97316"></i>overcount risk</span></div></header><div id="chart"></div><script>const raw=${ganttData};const cats=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.activeHours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.activeHours,0));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return [r.project,r.start+' → '+r.end,'active: '+r.activeHours+'h','provider: '+r.provider,'status: '+(r.statusLabel||'unknown')+' ('+(r.confidence||'derived')+')',r.coverageWarnings&&r.coverageWarnings.length?'warnings: '+r.coverageWarnings.join(' | '):'',r.excludedSessionIds&&r.excludedSessionIds.length?'excluded sessions: '+r.excludedSessionIds.length:'',r.rawIntervalCount!=null?'raw intervals: '+r.rawIntervalCount:'',r.collapsedIntervalCount!=null?'collapsed intervals: '+r.collapsedIntervalCount:'',r.contributingPath||''].filter(Boolean).join('<br>')}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:220,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:api.value(3)||'#60a5fa'}}},encode:{x:[0,1],y:2},data:raw.map(r=>[r.start,r.end,r.project,r.statusColor||'#60a5fa'])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+	await writeFile(areaPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Weekly Project Area</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:.5rem}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:999px;display:inline-block}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Weekly Project Area</h1><p class="muted">Weekly available active hours by canonical project. Area color reflects exported confidence/coverage status. Totals are timestamp-backed estimates and can undercount or require overcount safeguards.</p><div class="legend"><span><i class="swatch" style="background:#22c55e"></i>complete</span><span><i class="swatch" style="background:#a78bfa"></i>partial</span><span><i class="swatch" style="background:#facc15"></i>undercount risk</span><span><i class="swatch" style="background:#f97316"></i>overcount risk</span></div></header><div id="chart"></div><script>const raw=${weeklyData};const weeks=[...new Set(raw.map(r=>r.week))].sort();const projects=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.hours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.hours,0)).slice(0,12);const meta=Object.fromEntries(raw.map(r=>[r.project,r]));const series=projects.map(name=>{const m=meta[name]||{};return {name:name+' ['+(m.statusLabel||'unknown')+']',type:'line',stack:'hours',smooth:true,lineStyle:{color:m.color||'#60a5fa'},itemStyle:{color:m.color||'#60a5fa'},areaStyle:{color:m.color||'#60a5fa',opacity:.35},data:weeks.map(w=>{const row=raw.find(r=>r.project===name&&r.week===w);return row?row.hours:0})}});const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{trigger:'axis',formatter:items=>{const lines=[items[0].axisValueLabel];for(const item of items){const project=item.seriesName.replace(/ \[[^\]]+\]$/,'');const m=meta[project]||{};lines.push(item.marker+item.seriesName+': '+item.value+'h'+(m.coverageWarnings&&m.coverageWarnings.length?' — '+m.coverageWarnings.join(' | '):''));}return lines.join('<br>')}},legend:{top:8,textStyle:{color:'#cbd5e1'}},grid:{left:60,right:40,top:60,bottom:80},xAxis:{type:'category',data:weeks,axisLabel:{color:'#cbd5e1',rotate:45}},yAxis:{type:'value',axisLabel:{color:'#cbd5e1',formatter:v=>v+'h'}},series});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+	await writeFile(treemapPath, `<!doctype html><html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Treemap</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:.5rem}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:12px;height:12px;border-radius:999px;display:inline-block}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Treemap</h1><p class="muted">Overall allocation of available active hours. Tile color reflects exported confidence/coverage status; size shows timestamp-backed effort, not guaranteed lifetime effort.</p><div class="legend"><span><i class="swatch" style="background:#22c55e"></i>complete</span><span><i class="swatch" style="background:#a78bfa"></i>partial</span><span><i class="swatch" style="background:#facc15"></i>undercount risk</span><span><i class="swatch" style="background:#f97316"></i>overcount risk</span></div></header><div id="chart"></div><script>const raw=${treemapData};const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const d=p.data;return [d.name,'active: '+d.value+'h','status: '+(d.statusLabel||'unknown')+' ('+(d.confidence||'derived')+')','providers: '+(d.providers||[]).join(', '),d.coverageWarnings&&d.coverageWarnings.length?'warnings: '+d.coverageWarnings.join(' | '):'',d.excludedSessionIds&&d.excludedSessionIds.length?'excluded sessions: '+d.excludedSessionIds.length:'',d.rawIntervalCount!=null?'raw intervals: '+d.rawIntervalCount:'',d.collapsedIntervalCount!=null?'collapsed intervals: '+d.collapsedIntervalCount:'',((d.paths||[]).join('<br>'))].filter(Boolean).join('<br>')}},series:[{type:'treemap',roam:false,breadcrumb:{show:false},label:{color:'#e5e7eb'},itemStyle:{borderColor:'#111827'},data:raw.map(d=>({...d,itemStyle:{color:d.color||'#60a5fa'}}))}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
 	return [
-		{ title: "Project Gantt", path: ganttPath, description: "Canonical projects across time with session spans and active hours." },
-		{ title: "Weekly Project Area", path: areaPath, description: "Weekly active-hour dominance by canonical project." },
-		{ title: "Project Treemap", path: treemapPath, description: "Overall allocation of active hours by project." },
+		{ title: "Project Gantt", path: ganttPath, description: "Canonical projects across time with session spans and active hours plus coverage/confidence status." },
+		{ title: "Weekly Project Area", path: areaPath, description: "Weekly active-hour dominance by canonical project with confidence/coverage coloring." },
+		{ title: "Project Treemap", path: treemapPath, description: "Overall allocation of active hours by project with confidence/coverage coloring." },
 	] satisfies ReportArtifact[];
 }
 
