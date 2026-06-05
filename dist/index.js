@@ -1380,8 +1380,15 @@ function timeValue(value) {
     const t = Date.parse(value ?? "");
     return Number.isFinite(t) ? t : undefined;
 }
+function displayProjectLabel(value) {
+    if (!value)
+        return "unknown";
+    if (value.startsWith("/") || value.includes("/"))
+        return cwdLabel(value);
+    return value;
+}
 function projectLabelForMetric(graph, metric) {
-    return metric.displayName ?? repoIdentityDisplay(graph, metric.repoIdentityId) ?? metric.project ?? "unknown";
+    return displayProjectLabel(metric.displayName ?? repoIdentityDisplay(graph, metric.repoIdentityId) ?? metric.project ?? "unknown");
 }
 function derivedActiveTimeMetrics(graph) {
     const byProject = new Map();
@@ -1480,29 +1487,57 @@ async function writeFocusReports(reportDir, graph, stamp) {
 }
 function projectTimelineRows(graph) {
     const rows = [];
+    for (const span of graph.temporalActivitySpans ?? []) {
+        const start = span.start ?? "";
+        const end = span.end ?? span.start ?? "";
+        if (!start || !timeValue(start))
+            continue;
+        const project = displayProjectLabel(repoIdentityDisplay(graph, span.repoIdentityId) ?? span.cwd ?? span.label ?? span.provider ?? "unknown");
+        rows.push({
+            project,
+            start,
+            end: timeValue(end) ? end : start,
+            activeHours: +(span.activeHours ?? ((span.activeMinutes ?? 0) / 60)).toFixed(2),
+            provider: span.provider ?? "unknown",
+            sessionId: span.sessionId ?? span.id,
+            contributingPath: span.cwd,
+            confidence: span.metricConfidence ?? span.confidence ?? "derived",
+        });
+    }
+    if (rows.length)
+        return rows;
     for (const node of graph.nodes.values()) {
         const active = metricObject(node.metadata?.activeTime);
         const minutes = metricNumber(active?.activeMinutes);
-        const start = String(active?.startTimestamp ?? node.metadata?.startTimestamp ?? node.timestamp ?? "");
-        const end = String(active?.endTimestamp ?? node.metadata?.endTimestamp ?? node.timestamp ?? start);
+        const start = String(active?.firstWorkedAt ?? node.metadata?.startTimestamp ?? node.timestamp ?? "");
+        const end = String(active?.lastWorkedAt ?? node.metadata?.endTimestamp ?? node.timestamp ?? start);
         if (!start || !timeValue(start))
             continue;
-        rows.push({
-            project: repoLabelForNode(node, graph),
-            start,
-            end: timeValue(end) ? end : start,
-            activeHours: minutes != null ? +(minutes / 60).toFixed(2) : 0,
-            provider: node.provider ?? "unknown",
-            sessionId: node.id,
-            contributingPath: node.cwd,
-            confidence: String(active?.confidence ?? node.confidence ?? "derived"),
-        });
+        rows.push({ project: displayProjectLabel(repoLabelForNode(node, graph)), start, end: timeValue(end) ? end : start, activeHours: minutes != null ? +(minutes / 60).toFixed(2) : 0, provider: node.provider ?? "unknown", sessionId: node.id, contributingPath: node.cwd, confidence: String(active?.confidence ?? node.confidence ?? "derived") });
     }
     return rows;
 }
+function collapsedProjectTimelineRows(graph) {
+    const rows = projectTimelineRows(graph).filter((row) => row.activeHours > 0).sort((a, b) => a.project.localeCompare(b.project) || a.start.localeCompare(b.start));
+    const collapsed = [];
+    for (const row of rows) {
+        const previous = collapsed[collapsed.length - 1];
+        if (previous && previous.project === row.project && (timeValue(row.start) ?? 0) <= (timeValue(previous.end) ?? 0)) {
+            if ((timeValue(row.end) ?? 0) > (timeValue(previous.end) ?? 0))
+                previous.end = row.end;
+            previous.activeHours = Math.max(previous.activeHours, row.activeHours);
+            previous.contributingPath = [...new Set([previous.contributingPath, row.contributingPath].filter(Boolean))].join("; ");
+            previous.confidence = previous.confidence === row.confidence ? previous.confidence : "mixed";
+        }
+        else {
+            collapsed.push({ ...row });
+        }
+    }
+    return collapsed;
+}
 function weeklyProjectRows(graph) {
     const totals = new Map();
-    for (const row of projectTimelineRows(graph)) {
+    for (const row of collapsedProjectTimelineRows(graph)) {
         const d = new Date(row.start);
         const weekStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7))).toISOString().slice(0, 10);
         const project = row.project;
@@ -1513,16 +1548,29 @@ function weeklyProjectRows(graph) {
     return [...totals.entries()].flatMap(([project, byWeek]) => [...byWeek.entries()].map(([week, hours]) => ({ project, week, hours: +hours.toFixed(2) })));
 }
 async function writeProjectVisualizations(reportDir, graph, stamp) {
-    const timelineRows = projectTimelineRows(graph).sort((a, b) => a.start.localeCompare(b.start));
-    const metricRows = [...((graph.activeTimeMetrics?.length ? graph.activeTimeMetrics : derivedActiveTimeMetrics(graph)) ?? [])].sort((a, b) => (b.activeMinutes ?? 0) - (a.activeMinutes ?? 0));
+    const timelineRows = collapsedProjectTimelineRows(graph).sort((a, b) => a.start.localeCompare(b.start));
+    const metricTotals = new Map();
+    for (const row of timelineRows) {
+        const item = metricTotals.get(row.project) ?? { name: row.project, value: 0, paths: new Set(), providers: new Set(), confidence: new Set() };
+        item.value += row.activeHours;
+        if (row.contributingPath)
+            for (const p of row.contributingPath.split("; ").filter(Boolean))
+                item.paths.add(p);
+        if (row.provider)
+            item.providers.add(row.provider);
+        if (row.confidence)
+            item.confidence.add(row.confidence);
+        metricTotals.set(row.project, item);
+    }
+    const metricRows = [...metricTotals.values()].map((item) => ({ name: item.name, value: +item.value.toFixed(2), paths: [...item.paths].sort(), providers: [...item.providers].sort(), confidence: [...item.confidence].sort().join(", ") })).sort((a, b) => b.value - a.value);
     const ganttPath = join(reportDir, "13-project-gantt.html");
     const areaPath = join(reportDir, "14-weekly-project-area.html");
     const treemapPath = join(reportDir, "15-project-treemap.html");
     const ganttData = JSON.stringify(timelineRows).replace(/</g, "\\u003c");
     const weekly = weeklyProjectRows(graph);
     const weeklyData = JSON.stringify(weekly).replace(/</g, "\\u003c");
-    const treemapData = JSON.stringify(metricRows.map((metric) => ({ name: projectLabelForMetric(graph, metric), value: +(metric.activeHours ?? ((metric.activeMinutes ?? 0) / 60)).toFixed(2), paths: metric.contributingPaths ?? [], providers: metric.providers ?? [], confidence: metric.confidence ?? "" }))).replace(/</g, "\\u003c");
-    await writeFile(ganttPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Gantt</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Gantt</h1><p class="muted">Canonical projects on rows, time on the x-axis, bar width by session span, tooltip includes active hours and contributing path.</p></header><div id="chart"></div><script>const raw=${ganttData};const cats=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.activeHours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.activeHours,0));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.project+'<br>'+r.start+' → '+r.end+'<br>active: '+r.activeHours+'h<br>provider: '+r.provider+'<br>'+ (r.contributingPath||'')}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:260,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1',width:240,overflow:'truncate'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},encode:{x:[0,1],y:2},data:raw.map(r=>[r.start,r.end,r.project])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+    const treemapData = JSON.stringify(metricRows).replace(/</g, "\\u003c");
+    await writeFile(ganttPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Gantt</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Gantt</h1><p class="muted">Canonical projects on rows, time on the x-axis, bar width by session span, tooltip includes active hours and contributing path.</p></header><div id="chart"></div><script>const raw=${ganttData};const cats=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.activeHours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.activeHours,0));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.project+'<br>'+r.start+' → '+r.end+'<br>active: '+r.activeHours+'h<br>provider: '+r.provider+'<br>'+ (r.contributingPath||'')}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:220,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},encode:{x:[0,1],y:2},data:raw.map(r=>[r.start,r.end,r.project])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
     await writeFile(areaPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Weekly Project Area</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Weekly Project Area</h1><p class="muted">Weekly active hours by canonical project. Useful for seeing which projects dominated each period.</p></header><div id="chart"></div><script>const raw=${weeklyData};const weeks=[...new Set(raw.map(r=>r.week))].sort();const projects=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.hours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.hours,0)).slice(0,12);const series=projects.map(name=>({name,type:'line',stack:'hours',areaStyle:{},smooth:true,data:weeks.map(w=>{const row=raw.find(r=>r.project===name&&r.week===w);return row?row.hours:0})}));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{trigger:'axis'},legend:{top:8,textStyle:{color:'#cbd5e1'}},grid:{left:60,right:40,top:60,bottom:80},xAxis:{type:'category',data:weeks,axisLabel:{color:'#cbd5e1',rotate:45}},yAxis:{type:'value',axisLabel:{color:'#cbd5e1',formatter:v=>v+'h'}},series});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
     await writeFile(treemapPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Treemap</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Treemap</h1><p class="muted">Overall project allocation by estimated active hours. Size shows effort; details include contributing paths and providers.</p></header><div id="chart"></div><script>const raw=${treemapData};const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const d=p.data;return d.name+'<br>active: '+d.value+'h<br>providers: '+(d.providers||[]).join(', ')+'<br>'+((d.paths||[]).join('<br>'))}},series:[{type:'treemap',roam:false,breadcrumb:{show:false},label:{color:'#e5e7eb'},itemStyle:{borderColor:'#111827'},data:raw}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
     return [

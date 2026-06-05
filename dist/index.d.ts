@@ -223,6 +223,7 @@ type StoreExport = {
     temporalActivitySpans?: {
         id: string;
         sessionId?: string;
+        repoIdentityId?: string;
         provider?: string;
         cwd?: string;
         label?: string;
