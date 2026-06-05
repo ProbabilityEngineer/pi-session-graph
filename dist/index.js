@@ -1376,6 +1376,13 @@ function formatHours(minutes, hours) {
     const value = hours ?? (minutes != null ? minutes / 60 : undefined);
     return value == null ? "" : `${value.toFixed(value >= 10 ? 1 : 2)}h`;
 }
+function timeValue(value) {
+    const t = Date.parse(value ?? "");
+    return Number.isFinite(t) ? t : undefined;
+}
+function projectLabelForMetric(graph, metric) {
+    return metric.displayName ?? repoIdentityDisplay(graph, metric.repoIdentityId) ?? metric.project ?? "unknown";
+}
 function derivedActiveTimeMetrics(graph) {
     const byProject = new Map();
     for (const node of graph.nodes.values()) {
@@ -1471,6 +1478,59 @@ async function writeFocusReports(reportDir, graph, stamp) {
     artifacts.unshift({ title: "Project focus index", path: indexPath, description: "Top project timelines and focused drilldowns." });
     return artifacts;
 }
+function projectTimelineRows(graph) {
+    const rows = [];
+    for (const node of graph.nodes.values()) {
+        const active = metricObject(node.metadata?.activeTime);
+        const minutes = metricNumber(active?.activeMinutes);
+        const start = String(active?.startTimestamp ?? node.metadata?.startTimestamp ?? node.timestamp ?? "");
+        const end = String(active?.endTimestamp ?? node.metadata?.endTimestamp ?? node.timestamp ?? start);
+        if (!start || !timeValue(start))
+            continue;
+        rows.push({
+            project: repoLabelForNode(node, graph),
+            start,
+            end: timeValue(end) ? end : start,
+            activeHours: minutes != null ? +(minutes / 60).toFixed(2) : 0,
+            provider: node.provider ?? "unknown",
+            sessionId: node.id,
+            contributingPath: node.cwd,
+            confidence: String(active?.confidence ?? node.confidence ?? "derived"),
+        });
+    }
+    return rows;
+}
+function weeklyProjectRows(graph) {
+    const totals = new Map();
+    for (const row of projectTimelineRows(graph)) {
+        const d = new Date(row.start);
+        const weekStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7))).toISOString().slice(0, 10);
+        const project = row.project;
+        const byWeek = totals.get(project) ?? new Map();
+        byWeek.set(weekStart, (byWeek.get(weekStart) ?? 0) + row.activeHours);
+        totals.set(project, byWeek);
+    }
+    return [...totals.entries()].flatMap(([project, byWeek]) => [...byWeek.entries()].map(([week, hours]) => ({ project, week, hours: +hours.toFixed(2) })));
+}
+async function writeProjectVisualizations(reportDir, graph, stamp) {
+    const timelineRows = projectTimelineRows(graph).sort((a, b) => a.start.localeCompare(b.start));
+    const metricRows = [...((graph.activeTimeMetrics?.length ? graph.activeTimeMetrics : derivedActiveTimeMetrics(graph)) ?? [])].sort((a, b) => (b.activeMinutes ?? 0) - (a.activeMinutes ?? 0));
+    const ganttPath = join(reportDir, "13-project-gantt.html");
+    const areaPath = join(reportDir, "14-weekly-project-area.html");
+    const treemapPath = join(reportDir, "15-project-treemap.html");
+    const ganttData = JSON.stringify(timelineRows).replace(/</g, "\\u003c");
+    const weekly = weeklyProjectRows(graph);
+    const weeklyData = JSON.stringify(weekly).replace(/</g, "\\u003c");
+    const treemapData = JSON.stringify(metricRows.map((metric) => ({ name: projectLabelForMetric(graph, metric), value: +(metric.activeHours ?? ((metric.activeMinutes ?? 0) / 60)).toFixed(2), paths: metric.contributingPaths ?? [], providers: metric.providers ?? [], confidence: metric.confidence ?? "" }))).replace(/</g, "\\u003c");
+    await writeFile(ganttPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Gantt</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Gantt</h1><p class="muted">Canonical projects on rows, time on the x-axis, bar width by session span, tooltip includes active hours and contributing path.</p></header><div id="chart"></div><script>const raw=${ganttData};const cats=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.activeHours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.activeHours,0));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.project+'<br>'+r.start+' → '+r.end+'<br>active: '+r.activeHours+'h<br>provider: '+r.provider+'<br>'+ (r.contributingPath||'')}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:260,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1',width:240,overflow:'truncate'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},encode:{x:[0,1],y:2},data:raw.map(r=>[r.start,r.end,r.project])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+    await writeFile(areaPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Weekly Project Area</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Weekly Project Area</h1><p class="muted">Weekly active hours by canonical project. Useful for seeing which projects dominated each period.</p></header><div id="chart"></div><script>const raw=${weeklyData};const weeks=[...new Set(raw.map(r=>r.week))].sort();const projects=[...new Set(raw.map(r=>r.project))].sort((a,b)=>raw.filter(x=>x.project===b).reduce((n,x)=>n+x.hours,0)-raw.filter(x=>x.project===a).reduce((n,x)=>n+x.hours,0)).slice(0,12);const series=projects.map(name=>({name,type:'line',stack:'hours',areaStyle:{},smooth:true,data:weeks.map(w=>{const row=raw.find(r=>r.project===name&&r.week===w);return row?row.hours:0})}));const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{trigger:'axis'},legend:{top:8,textStyle:{color:'#cbd5e1'}},grid:{left:60,right:40,top:60,bottom:80},xAxis:{type:'category',data:weeks,axisLabel:{color:'#cbd5e1',rotate:45}},yAxis:{type:'value',axisLabel:{color:'#cbd5e1',formatter:v=>v+'h'}},series});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+    await writeFile(treemapPath, `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(stamp)} — Project Treemap</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#111827;color:#e5e7eb;margin:0}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}#chart{height:92vh}</style></head><body><header><h1>${escapeHtml(stamp)} — Project Treemap</h1><p class="muted">Overall project allocation by estimated active hours. Size shows effort; details include contributing paths and providers.</p></header><div id="chart"></div><script>const raw=${treemapData};const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const d=p.data;return d.name+'<br>active: '+d.value+'h<br>providers: '+(d.providers||[]).join(', ')+'<br>'+((d.paths||[]).join('<br>'))}},series:[{type:'treemap',roam:false,breadcrumb:{show:false},label:{color:'#e5e7eb'},itemStyle:{borderColor:'#111827'},data:raw}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`);
+    return [
+        { title: "Project Gantt", path: ganttPath, description: "Canonical projects across time with session spans and active hours." },
+        { title: "Weekly Project Area", path: areaPath, description: "Weekly active-hour dominance by canonical project." },
+        { title: "Project Treemap", path: treemapPath, description: "Overall allocation of active hours by project." },
+    ];
+}
 async function writeChartTimelineReports(reportDir, graph, stamp) {
     const make = async (path, title, group) => {
         const spans = graph.temporalActivitySpans ?? [];
@@ -1478,8 +1538,8 @@ async function writeChartTimelineReports(reportDir, graph, stamp) {
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb;margin:0}#chart{height:92vh}header{padding:1rem;background:#0f172a;border-bottom:1px solid #334155}.muted{color:#94a3b8}</style></head><body><header><h1>${escapeHtml(title)}</h1><p class="muted">Chart-library timeline using Apache ECharts from CDN. Bars show session/activity spans; zoom and pan are enabled. No transcript content is included.</p></header><div id="chart"></div><script>const raw=${JSON.stringify(data).replace(/</g, "\\u003c")};const cats=[...new Set(raw.map(r=>r.name))].sort();const chart=echarts.init(document.getElementById('chart'));chart.setOption({backgroundColor:'#111827',tooltip:{formatter:p=>{const r=raw[p.dataIndex];return r.name+'<br>'+r.value[0]+' → '+r.value[1]+'<br>provider: '+r.value[2]+'<br>lines: '+r.value[3]+'<br>'+r.value[4]}},dataZoom:[{type:'slider',xAxisIndex:0},{type:'inside',xAxisIndex:0},{type:'slider',yAxisIndex:0},{type:'inside',yAxisIndex:0}],grid:{left:260,right:40,top:30,bottom:80},xAxis:{type:'time',axisLabel:{color:'#cbd5e1'}},yAxis:{type:'category',data:cats,axisLabel:{color:'#cbd5e1',width:240,overflow:'truncate'}},series:[{type:'custom',renderItem:(params,api)=>{const cat=api.value(2);const start=api.coord([api.value(0),cat]);const end=api.coord([api.value(1),cat]);const h=12;return {type:'rect',shape:{x:start[0],y:start[1]-h/2,width:Math.max(3,end[0]-start[0]),height:h},style:{fill:'#60a5fa'}}},dimensions:['start','end','cat'],encode:{x:[0,1],y:2},data:raw.map(r=>[r.value[0],r.value[1],r.name])}]});window.addEventListener('resize',()=>chart.resize());</script></body></html>`;
         await writeFile(path, html);
     };
-    const projects = join(reportDir, "11-chart-timeline-projects.html");
-    const sessions = join(reportDir, "12-chart-timeline-sessions.html");
+    const projects = join(reportDir, "16-chart-timeline-projects.html");
+    const sessions = join(reportDir, "17-chart-timeline-sessions.html");
     await make(projects, `${stamp} — Chart Timeline Projects`, "label");
     await make(sessions, `${stamp} — Chart Timeline Sessions`, "sessionId");
     return [
@@ -1522,6 +1582,7 @@ async function writeReportPack(graph, current) {
     artifacts.push({ title: "Lineage Full Interactive", path: lineageFullPath, description: "Inventory-style interactive full lineage." }, { title: "Lineage Focused Interactive", path: lineageFocusedPath, description: "Interactive graph limited to sessions with meaningful edges." }, { title: "Timeline Projects", path: timelineProjectsPath, description: "Timeline grouped by project/cwd." }, { title: "Timeline Sessions", path: timelineSessionsPath, description: "Timeline grouped by individual session." });
     artifacts.push(...await writeHotspotReports(reportDir, graph, stamp));
     artifacts.push(...await writeFocusReports(reportDir, graph, stamp));
+    artifacts.push(...await writeProjectVisualizations(reportDir, graph, stamp));
     artifacts.push(...await writeChartTimelineReports(reportDir, graph, stamp));
     const rel = (path) => path.startsWith(root) ? path.slice(root.length + 1) : path;
     const indexPath = join(root, "index.html");
@@ -1550,7 +1611,7 @@ async function writeReportPack(graph, current) {
     };
     const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Reports explain what to notice; archive preserves raw graph artifacts for reconstruction.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Archive</h2><ol>${artifactList("archive")}</ol></div><div class="card"><h2>Reports</h2><ol>${artifactList("reports")}</ol></div>`;
     await writeFile(indexPath, reportShell(`${stamp} — Session Graph Report Index`, indexBody));
-    await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-active-hours.html`, `5. reports/05-meaningful-lineage-forest.svg`, `6. reports/06-lineage-full-interactive.html and later files`, `7. reports/09-project-focus-index.html`, `8. reports/11-chart-timeline-projects.html`, `9. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
+    await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-active-hours.html`, `5. reports/05-meaningful-lineage-forest.svg`, `6. reports/06-lineage-full-interactive.html and later files`, `7. reports/09-project-focus-index.html`, `8. reports/13-project-gantt.html`, `9. reports/14-weekly-project-area.html`, `10. reports/15-project-treemap.html`, `11. reports/16-chart-timeline-projects.html`, `12. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
     return { root, indexPath, readmePath, artifacts };
 }
 async function writeNamedInteractiveViewers(graph) {
