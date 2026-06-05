@@ -1527,11 +1527,28 @@ async function writeReportPack(graph, current) {
     const indexPath = join(root, "index.html");
     const readmePath = join(root, "README.md");
     const sortedArtifacts = [...artifacts].sort((a, b) => rel(a.path).localeCompare(rel(b.path), undefined, { numeric: true }));
-    const artifactList = (section) => sortedArtifacts
-        .filter((artifact) => rel(artifact.path).startsWith(`${section}/`))
-        .map((artifact) => `<li><a href="${escapeHtml(rel(artifact.path))}">${escapeHtml(rel(artifact.path))}</a> — ${escapeHtml(artifact.title)}<br/><span class="muted">${escapeHtml(artifact.description)}</span></li>`)
-        .join("\n") || `<li class="muted">No ${section} artifacts.</li>`;
-    const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Reports explain what to notice; archive preserves raw graph artifacts for reconstruction.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Reports</h2><ol>${artifactList("reports")}</ol></div><div class="card"><h2>Archive</h2><ol>${artifactList("archive")}</ol></div>`;
+    const artifactStem = (relativePath) => relativePath.replace(/\.[^.\/]+$/, "");
+    const artifactList = (section) => {
+        const sectionArtifacts = sortedArtifacts.filter((artifact) => rel(artifact.path).startsWith(`${section}/`));
+        const groups = new Map();
+        for (const artifact of sectionArtifacts) {
+            const key = artifactStem(rel(artifact.path));
+            const list = groups.get(key) ?? [];
+            list.push(artifact);
+            groups.set(key, list);
+        }
+        const items = [...groups.entries()]
+            .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
+            .flatMap(([, group], groupIndex) => {
+            const sortedGroup = group.sort((a, b) => rel(a.path).localeCompare(rel(b.path), undefined, { numeric: true }));
+            return sortedGroup.map((artifact, variantIndex) => {
+                const number = sortedGroup.length > 1 ? `${groupIndex + 1}${String.fromCharCode(97 + variantIndex)}` : `${groupIndex + 1}`;
+                return `<li value="${groupIndex + 1}"><span class="muted">${number}.</span> <a href="${escapeHtml(rel(artifact.path))}">${escapeHtml(rel(artifact.path))}</a> — ${escapeHtml(artifact.title)}<br/><span class="muted">${escapeHtml(artifact.description)}</span></li>`;
+            });
+        });
+        return items.join("\n") || `<li class="muted">No ${section} artifacts.</li>`;
+    };
+    const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Reports explain what to notice; archive preserves raw graph artifacts for reconstruction.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Archive</h2><ol>${artifactList("archive")}</ol></div><div class="card"><h2>Reports</h2><ol>${artifactList("reports")}</ol></div>`;
     await writeFile(indexPath, reportShell(`${stamp} — Session Graph Report Index`, indexBody));
     await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-active-hours.html`, `5. reports/05-meaningful-lineage-forest.svg`, `6. reports/06-lineage-full-interactive.html and later files`, `7. reports/09-project-focus-index.html`, `8. reports/11-chart-timeline-projects.html`, `9. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
     return { root, indexPath, readmePath, artifacts };
