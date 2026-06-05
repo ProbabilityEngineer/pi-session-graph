@@ -1376,8 +1376,28 @@ function formatHours(minutes, hours) {
     const value = hours ?? (minutes != null ? minutes / 60 : undefined);
     return value == null ? "" : `${value.toFixed(value >= 10 ? 1 : 2)}h`;
 }
+function derivedActiveTimeMetrics(graph) {
+    const byProject = new Map();
+    for (const node of graph.nodes.values()) {
+        const active = metricObject(node.metadata?.activeTime);
+        const minutes = metricNumber(active?.activeMinutes) ?? 0;
+        if (!minutes)
+            continue;
+        const displayName = repoLabelForNode(node, graph);
+        const item = byProject.get(displayName) ?? { project: displayName, displayName, activeMinutes: 0, workBlockCount: 0, sessionCount: 0, providers: new Set(), contributingPaths: new Set(), confidence: String(active?.confidence ?? "derived") };
+        item.activeMinutes += minutes;
+        item.workBlockCount += metricNumber(active?.workBlockCount) ?? 0;
+        item.sessionCount++;
+        if (node.provider)
+            item.providers.add(node.provider);
+        if (node.cwd && !node.cwd.startsWith("("))
+            item.contributingPaths.add(node.cwd);
+        byProject.set(displayName, item);
+    }
+    return [...byProject.values()].map((item) => ({ ...item, repoIdentityId: undefined, activeHours: +(item.activeMinutes / 60).toFixed(2), providers: [...item.providers].sort(), contributingPaths: [...item.contributingPaths].sort() }));
+}
 async function writeActiveHoursReport(reportDir, graph, stamp) {
-    const metrics = [...(graph.activeTimeMetrics ?? [])].sort((a, b) => (b.activeMinutes ?? 0) - (a.activeMinutes ?? 0));
+    const metrics = [...((graph.activeTimeMetrics?.length ? graph.activeTimeMetrics : derivedActiveTimeMetrics(graph)) ?? [])].sort((a, b) => (b.activeMinutes ?? 0) - (a.activeMinutes ?? 0));
     const byAgent = new Map();
     for (const node of graph.nodes.values()) {
         const active = metricObject(node.metadata?.activeTime);
@@ -1506,7 +1526,12 @@ async function writeReportPack(graph, current) {
     const rel = (path) => path.startsWith(root) ? path.slice(root.length + 1) : path;
     const indexPath = join(root, "index.html");
     const readmePath = join(root, "README.md");
-    const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Recommended reading order: hotspots, repo jump map, false starts, active hours, meaningful lineage forest, focused interactive views, archive only when reconstructing history.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Artifacts</h2><ol>${artifacts.map((a) => `<li><a href="${escapeHtml(rel(a.path))}">${escapeHtml(a.title)}</a><br/><span class="muted">${escapeHtml(a.description)}</span></li>`).join("\n")}</ol></div>`;
+    const sortedArtifacts = [...artifacts].sort((a, b) => rel(a.path).localeCompare(rel(b.path), undefined, { numeric: true }));
+    const artifactList = (section) => sortedArtifacts
+        .filter((artifact) => rel(artifact.path).startsWith(`${section}/`))
+        .map((artifact) => `<li><a href="${escapeHtml(rel(artifact.path))}">${escapeHtml(rel(artifact.path))}</a> — ${escapeHtml(artifact.title)}<br/><span class="muted">${escapeHtml(artifact.description)}</span></li>`)
+        .join("\n") || `<li class="muted">No ${section} artifacts.</li>`;
+    const indexBody = `<p class="muted">Generated ${new Date().toISOString()} from ${graph.source}. Reports explain what to notice; archive preserves raw graph artifacts for reconstruction.</p><div class="card"><h2>Summary</h2><ul><li>Sessions: ${graph.nodes.size}</li><li>Edges: ${graph.records.length}</li><li>Roots: ${roots(graph).length}</li><li>Leaves: ${leaves(graph).length}</li></ul></div><div class="card"><h2>Reports</h2><ol>${artifactList("reports")}</ol></div><div class="card"><h2>Archive</h2><ol>${artifactList("archive")}</ol></div>`;
     await writeFile(indexPath, reportShell(`${stamp} — Session Graph Report Index`, indexBody));
     await writeFile(readmePath, [`# Session graph report pack`, ``, `Generated: ${new Date().toISOString()}`, ``, `Open index.html first.`, ``, `Recommended reading order:`, `1. reports/01-hotspots.html`, `2. reports/02-repo-jump-map.svg`, `3. reports/03-false-starts.html`, `4. reports/04-active-hours.html`, `5. reports/05-meaningful-lineage-forest.svg`, `6. reports/06-lineage-full-interactive.html and later files`, `7. reports/09-project-focus-index.html`, `8. reports/11-chart-timeline-projects.html`, `9. archive/ only for archaeology/reconstruction`, ``, `Archive preserves what happened. Reports explain what to notice.`, ``].join("\n"));
     return { root, indexPath, readmePath, artifacts };
