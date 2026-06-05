@@ -113,6 +113,7 @@ type StoreExport = {
             cwd?: string;
             displayName?: string;
             provider?: string;
+            repoIdentityId?: string;
         };
     }[];
     edges?: ({
@@ -252,6 +253,9 @@ type StoreExport = {
     activeTimeMetrics?: {
         id: string;
         project?: string;
+        repoIdentityId?: string;
+        displayName?: string;
+        contributingPaths?: string[];
         activeMinutes?: number;
         activeHours?: number;
         workBlockCount?: number;

@@ -54,7 +54,7 @@ type MetricMetadata = Record<string, unknown> & { timestampCoverage?: Record<str
 
 type StoreExport = {
 	nodes?: GenericNode[];
-	sessions?: { id: string; canonicalKey: string; provider?: string; providerSessionId?: string; startTimestamp?: string; endTimestamp?: string; lineCount?: number; byteCount?: number; metadata?: MetricMetadata & { cwd?: string; displayName?: string; provider?: string } }[];
+	sessions?: { id: string; canonicalKey: string; provider?: string; providerSessionId?: string; startTimestamp?: string; endTimestamp?: string; lineCount?: number; byteCount?: number; metadata?: MetricMetadata & { cwd?: string; displayName?: string; provider?: string; repoIdentityId?: string } }[];
 	edges?: ({ id: string; sourceSessionId: string; targetSessionId: string; edgeType: string; timestamp?: string; confidence?: string; provenance?: string; operationType?: string; tool?: string; mode?: string; batchId?: string; sourceRepo?: string; targetRepo?: string; metadata?: MetricMetadata & { fromCwd?: string; toCwd?: string; manifestIndex?: number; operationType?: string; tool?: string; mode?: string; batchId?: string; sourceRepo?: string; targetRepo?: string } } | GenericEdge)[];
 	labels?: { targetType: string; targetId: string; labelType: string; value: string; confidence?: string }[];
 	classifications?: { targetType: string; targetId: string; classification: string; confidence?: string; metadata?: { displayLabel?: string } }[];
@@ -66,7 +66,7 @@ type StoreExport = {
 	compactionEvents?: { id: string; sessionId: string; timestamp?: string; confidence?: string; eventCount?: number; summaryEventCount?: number; compactedLineCount?: number; compactedCharCount?: number; firstCompactionAt?: string; lastCompactionAt?: string; summary?: string; metadata?: { path?: string; eventCount?: number; summaryEventCount?: number } }[];
 	temporalActivitySpans?: { id: string; sessionId?: string; provider?: string; cwd?: string; label?: string; start?: string; end?: string; lineCount?: number; byteCount?: number; activityScore?: number; activeMinutes?: number; activeHours?: number; workBlockCount?: number; visitRows?: number; metricConfidence?: string; confidence?: string; provenance?: string }[];
 	workBursts?: { id: string; repoIdentityId?: string; sessionIds?: string[]; providers?: string[]; start?: string; end?: string; sessionCount?: number; confidence?: string; provenance?: string }[];
-	activeTimeMetrics?: { id: string; project?: string; activeMinutes?: number; activeHours?: number; workBlockCount?: number; sessionCount?: number; sessionIds?: string[]; providers?: string[]; idleThresholdMinutes?: number; confidence?: string; provenance?: string; metadata?: Record<string, unknown> }[];
+	activeTimeMetrics?: { id: string; project?: string; repoIdentityId?: string; displayName?: string; contributingPaths?: string[]; activeMinutes?: number; activeHours?: number; workBlockCount?: number; sessionCount?: number; sessionIds?: string[]; providers?: string[]; idleThresholdMinutes?: number; confidence?: string; provenance?: string; metadata?: Record<string, unknown> }[];
 	activityMetrics?: { id: string; provider?: string; cwd?: string; sessionCount?: number; eventCount?: number; messageCount?: number; toolCount?: number; lineCount?: number; byteCount?: number; activityScore?: number; activeMinutes?: number; activeHours?: number; workBlockCount?: number; visitRows?: number; firstStart?: string; lastEnd?: string; confidence?: string; provenance?: string; missingDataNotes?: string[] }[];
 };
 
@@ -235,7 +235,15 @@ function bucketLabel(path: string) {
 	return normalizeRepoPath(bucket);
 }
 
-function repoLabelForNode(node: SessionNode) {
+function repoIdentityDisplay(graph: Graph | undefined, repoIdentityId: unknown) {
+	if (typeof repoIdentityId !== "string" || !repoIdentityId) return undefined;
+	const repo = graph?.repoIdentities?.find((identity) => identity.id === repoIdentityId);
+	return repo?.displayName ?? repo?.stableName ?? repoIdentityId;
+}
+
+function repoLabelForNode(node: SessionNode, graph?: Graph) {
+	const identityLabel = repoIdentityDisplay(graph, node.metadata?.repoIdentityId);
+	if (identityLabel) return identityLabel;
 	if (node.cwd && node.cwd.startsWith("/")) return normalizeRepoPath(node.cwd);
 	const bucket = bucketLabel(node.path);
 	if (bucket?.startsWith("/")) return bucket;
@@ -671,8 +679,8 @@ function mermaidLabel(value: string) {
 	return value.replace(/\\/g, "\\\\").replace(/"/g, "&quot;").replace(/\r?\n/g, " ");
 }
 
-function laneKey(node: SessionNode) {
-	return repoLabelForNode(node);
+function laneKey(node: SessionNode, graph?: Graph) {
+	return repoLabelForNode(node, graph);
 }
 
 function agentLabel(node: SessionNode) {
@@ -767,7 +775,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 	];
 	const lanes = new Map<string, SessionNode[]>();
 	for (const node of graph.nodes.values()) {
-		const key = laneKey(node);
+		const key = laneKey(node, graph);
 		const list = lanes.get(key) ?? [];
 		list.push(node);
 		lanes.set(key, list);
@@ -801,7 +809,7 @@ function dotGraph(graph: Graph, current?: string, options: { starts?: boolean } 
 	for (const [label, nodes] of [...lanes.entries()].sort(([a], [b]) => a.localeCompare(b))) {
 		lines.push(`  subgraph cluster_${cluster++} {`, `    label="${dotEscape(`repo: ${label}`)}";`, "    color=\"#334155\";", "    fontcolor=\"#94a3b8\";", "    style=\"rounded,dashed\";");
 		for (const node of nodes.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? "") || a.id.localeCompare(b.id))) {
-			const repo = repoLabelForNode(node);
+			const repo = repoLabelForNode(node, graph);
 			const agent = agentLabel(node) ?? propagatedAgent.get(node.path);
 			const providerLabel = node.provider && node.provider !== "pi" ? `provider: ${node.provider}` : undefined;
 			const incoming = incomingBySession.get(node.path);
@@ -887,7 +895,7 @@ function mermaid(graph: Graph, current?: string) {
 	const lines = ["graph TD"];
 	const lanes = new Map<string, SessionNode[]>();
 	for (const node of graph.nodes.values()) {
-		const key = laneKey(node);
+		const key = laneKey(node, graph);
 		const list = lanes.get(key) ?? [];
 		list.push(node);
 		lanes.set(key, list);
@@ -926,7 +934,7 @@ function escapeHtml(value: unknown) {
 
 function graphExportData(graph: Graph) {
 	return {
-		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, label: node.label, displayName: node.displayName, pinnedLineageName: node.pinnedLineageName, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0, lineCount: node.lineCount })),
+		nodes: [...graph.nodes.values()].map((node) => ({ id: node.id, path: node.path, cwd: node.cwd, repoLabel: repoLabelForNode(node, graph), label: node.label, displayName: node.displayName, pinnedLineageName: node.pinnedLineageName, provider: node.provider, type: node.type ?? "session", status: node.status, confidence: node.confidence, provenance: node.provenance, scope: node.scope, timestamp: node.timestamp, evidence: node.evidence, metadata: node.metadata, compactionCount: node.compactionCount ?? 0, lineCount: node.lineCount })),
 		edges: graph.records.flatMap((record, index) => {
 			const from = graph.nodes.get(record.sourceSession);
 			const to = graph.nodes.get(record.destinationSession);
@@ -967,8 +975,8 @@ async function writeHtmlViewer(cwd: string, graph: Graph, options: { title?: str
 	const title = options.title ?? "Pi Session Graph Viewer";
 	const exportData = graphExportData(graph);
 	const data = JSON.stringify(exportData).replace(/</g, "\\u003c");
-	const staticLanes = [...new Set(exportData.nodes.map((node) => node.label || "(unlabeled)").filter(Boolean))].sort().slice(0, 80);
-	const staticHtml = [`<div class="lane"><h3>Static fallback</h3><p class="muted">If this does not become interactive, JavaScript failed or was blocked. Leave the search box empty to see all nodes; use it only to filter by label, cwd, provider, or session id.</p><p>${exportData.nodes.length} nodes, ${exportData.edges.length} edges embedded in this file.</p></div>`, ...staticLanes.map((lane) => `<div class="lane"><h3>${escapeHtml(lane)}</h3>${exportData.nodes.filter((node) => (node.label || "(unlabeled)") === lane).slice(0, 60).map((node) => `<button class="node" type="button">${escapeHtml(node.label || "(unlabeled)")} · ${escapeHtml(node.id)}${node.compactionCount ? ` · compact x${node.compactionCount}` : ""}</button>`).join("")}</div>`), `<div class="lane"><h3>Edges preview</h3>${exportData.edges.slice(0, 250).map((edge) => `<div class="edge ${escapeHtml(edge.confidence)}">${escapeHtml(edge.label || edge.type || "edge")} · ${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</div>`).join("")}</div>`].join("\n");
+	const staticLanes = [...new Set(exportData.nodes.map((node) => node.repoLabel || node.label || "(unlabeled)").filter(Boolean))].sort().slice(0, 80);
+	const staticHtml = [`<div class="lane"><h3>Static fallback</h3><p class="muted">If this does not become interactive, JavaScript failed or was blocked. Leave the search box empty to see all nodes; use it only to filter by label, cwd, provider, or session id.</p><p>${exportData.nodes.length} nodes, ${exportData.edges.length} edges embedded in this file.</p></div>`, ...staticLanes.map((lane) => `<div class="lane"><h3>${escapeHtml(lane)}</h3>${exportData.nodes.filter((node) => (node.repoLabel || node.label || "(unlabeled)") === lane).slice(0, 60).map((node) => `<button class="node" type="button">${escapeHtml(node.repoLabel || node.label || "(unlabeled)")} · ${escapeHtml(node.id)}${node.compactionCount ? ` · compact x${node.compactionCount}` : ""}</button>`).join("")}</div>`), `<div class="lane"><h3>Edges preview</h3>${exportData.edges.slice(0, 250).map((edge) => `<div class="edge ${escapeHtml(edge.confidence)}">${escapeHtml(edge.label || edge.type || "edge")} · ${escapeHtml(edge.from)} → ${escapeHtml(edge.to)}</div>`).join("")}</div>`].join("\n");
 	const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -1018,8 +1026,8 @@ function neighborhood(id,hops){let ids=new Set([id]);for(let i=0;i<hops;i++)for(
 function isRelation(e){return ['contradicts','supersedes','obsolete','contested'].includes(e.type)||['obsolete','contested'].includes(e.status)}
 function hasEv(x){return x.evidence||(x.metadata&&x.metadata.evidence)}
 function currentData(){const q=$('search').value.toLowerCase(), c=$('confidence').value, p=$('provider').value, nt=$('nodeType').value, t=$('edgeType').value, op=$('operationType').value, tool=$('tool').value, prov=$('provenance').value, st=$('status').value, mc=$('metricConfidence').value, ev=$('hasEvidence').checked, hm=$('hasMetrics').checked, low=$('lowTimestampCoverage').checked, rel=$('relations').checked;let edges=DATA.edges.filter(e=>(!c||e.confidence===c)&&(!p||e.provider===p)&&(!t||e.type===t)&&(!op||e.operationType===op)&&(!tool||e.tool===tool)&&(!prov||e.provenance===prov)&&(!st||e.status===st)&&(!mc||metricConf(e)===mc)&&(!ev||hasEv(e))&&(!hm||hasMetrics(e))&&(!low||lowTs(e))&&(!rel||isRelation(e))&&matchText(e,q));let ids=new Set(edges.flatMap(e=>[e.from,e.to]));let nodes=DATA.nodes.filter(n=>(!p||n.provider===p)&&(!nt||n.type===nt)&&(!prov||n.provenance===prov)&&(!st||n.status===st)&&(!mc||metricConf(n)===mc)&&(!ev||hasEv(n))&&(!hm||hasMetrics(n))&&(!low||lowTs(n))&&(!q||matchText(n,q)||ids.has(n.id)));if(focus){nodes=nodes.filter(n=>focus.has(n.id));const keep=new Set(nodes.map(n=>n.id));edges=edges.filter(e=>keep.has(e.from)&&keep.has(e.to))}return {nodes,edges}}
-function show(kind,obj){selected={kind,...obj};const rows=[['kind',kind],['id',obj.id],['type',obj.type],['operation',obj.operationType],['tool',obj.tool],['mode',obj.mode],['source repo',obj.sourceRepo],['target repo',obj.targetRepo],['label',obj.label],['metrics',metricSummary(obj)],['metric confidence',metricConf(obj)],['confidence',obj.confidence],['provenance',obj.provenance],['timestamp',obj.timestamp],['provider',obj.provider],['path',obj.path],['source',obj.sourceSession],['destination',obj.destinationSession]].filter(([,v])=>v!=null&&v!=='').map(([k,v])=>'<div class="field"><b>'+esc(k)+':</b> '+esc(v)+'</div>').join('');details.innerHTML=rows+'<h3>Metadata / evidence</h3><pre class="code">'+esc(JSON.stringify(obj.metadata??obj,null,2))+'</pre>';render()}
-function render(){try{const {nodes,edges}=currentData();graph.innerHTML='';for(const lane of uniq(nodes.map(n=>n.label||'(unlabeled)'))){const box=document.createElement('div');box.className='lane';const h=document.createElement('h3');h.textContent=lane;box.append(h);for(const n of nodes.filter(n=>(n.label||'(unlabeled)')===lane)){const el=document.createElement('button');el.className='node '+(selected&&selected.id===n.id?'selected':'');el.textContent=(n.label||'(unlabeled)')+' · '+n.id+(metricSummary(n)?' · '+metricSummary(n):'')+(n.compactionCount?' · compact x'+n.compactionCount:'');el.onclick=()=>show('node',n);box.append(el)}graph.append(box)}const edgeBox=document.createElement('div');edgeBox.className='lane';const eh=document.createElement('h3');eh.textContent='Edges';edgeBox.append(eh);for(const e of edges){const el=document.createElement('div');el.className='edge '+(e.confidence||'unknown')+(selected&&selected.id===e.id?' selected':'');el.textContent=(e.label||e.type||'edge')+(metricSummary(e)?' · '+metricSummary(e):'')+' · '+e.from+' → '+e.to;el.onclick=()=>show('edge',e);edgeBox.append(el)}graph.append(edgeBox);$('counts').textContent=nodes.length+' nodes, '+edges.length+' edges'+(focus?' · focused':'')}catch(err){graph.innerHTML='<div class="lane"><h3>Render error</h3><pre class="code">'+esc(err&&err.stack||err)+'</pre></div>';throw err}}
+function show(kind,obj){selected={kind,...obj};const rows=[['kind',kind],['id',obj.id],['type',obj.type],['operation',obj.operationType],['tool',obj.tool],['mode',obj.mode],['repo/project',obj.repoLabel],['source repo',obj.sourceRepo],['target repo',obj.targetRepo],['label',obj.label],['metrics',metricSummary(obj)],['metric confidence',metricConf(obj)],['confidence',obj.confidence],['provenance',obj.provenance],['timestamp',obj.timestamp],['provider',obj.provider],['path',obj.path],['source',obj.sourceSession],['destination',obj.destinationSession]].filter(([,v])=>v!=null&&v!=='').map(([k,v])=>'<div class="field"><b>'+esc(k)+':</b> '+esc(v)+'</div>').join('');details.innerHTML=rows+'<h3>Metadata / evidence</h3><pre class="code">'+esc(JSON.stringify(obj.metadata??obj,null,2))+'</pre>';render()}
+function render(){try{const {nodes,edges}=currentData();graph.innerHTML='';for(const lane of uniq(nodes.map(n=>n.label||'(unlabeled)'))){const box=document.createElement('div');box.className='lane';const h=document.createElement('h3');h.textContent=lane;box.append(h);for(const n of nodes.filter(n=>(n.label||'(unlabeled)')===lane)){const el=document.createElement('button');el.className='node '+(selected&&selected.id===n.id?'selected':'');el.textContent=(n.repoLabel||n.label||'(unlabeled)')+' · '+n.id+(metricSummary(n)?' · '+metricSummary(n):'')+(n.compactionCount?' · compact x'+n.compactionCount:'');el.onclick=()=>show('node',n);box.append(el)}graph.append(box)}const edgeBox=document.createElement('div');edgeBox.className='lane';const eh=document.createElement('h3');eh.textContent='Edges';edgeBox.append(eh);for(const e of edges){const el=document.createElement('div');el.className='edge '+(e.confidence||'unknown')+(selected&&selected.id===e.id?' selected':'');el.textContent=(e.label||e.type||'edge')+(metricSummary(e)?' · '+metricSummary(e):'')+' · '+e.from+' → '+e.to;el.onclick=()=>show('edge',e);edgeBox.append(el)}graph.append(edgeBox);$('counts').textContent=nodes.length+' nodes, '+edges.length+' edges'+(focus?' · focused':'')}catch(err){graph.innerHTML='<div class="lane"><h3>Render error</h3><pre class="code">'+esc(err&&err.stack||err)+'</pre></div>';throw err}}
 $('hop1').onclick=()=>{if(selected&&selected.kind==='node'){focus=neighborhood(selected.id,1);render()}};$('hop2').onclick=()=>{if(selected&&selected.kind==='node'){focus=neighborhood(selected.id,2);render()}};$('resetView').onclick=()=>{focus=null;render()};$('exportSubgraph').onclick=()=>{details.textContent=JSON.stringify(currentData(),null,2)};$('exportMermaid').onclick=()=>{const {nodes,edges}=currentData(),ids=new Map(nodes.map(n=>[n.id,n]));details.textContent=['graph TD',...nodes.map(n=>'  '+n.id+'["'+String(n.label||n.id).replace(/"/g,'&quot;')+'"]'),...edges.filter(e=>ids.has(e.from)&&ids.has(e.to)).map(e=>'  '+e.from+' -->|'+(e.type||'edge')+'| '+e.to)].join('\\n')};
 for(const id of ['search','confidence','provider','nodeType','edgeType','operationType','tool','provenance','status','metricConfidence','hasEvidence','hasMetrics','lowTimestampCoverage','relations']) $(id).addEventListener('input',render); render();</script>
 </body></html>`;
@@ -1349,7 +1357,8 @@ async function writeDotPair(dir: string, name: string, dot: string, svg = true) 
 
 function repoKeyForPath(graph: Graph, path: string, cwd?: string) {
 	const node = graph.nodes.get(path);
-	return pathLabel(cwd ?? node?.cwd, path);
+	if (node) return repoLabelForNode(node, graph);
+	return pathLabel(cwd, path);
 }
 
 function repoJumpStats(graph: Graph) {
@@ -1473,7 +1482,7 @@ async function writeActiveHoursReport(reportDir: string, graph: Graph, stamp: st
 	}
 	const agentRows = [...byAgent.values()].sort((a, b) => b.activeMinutes - a.activeMinutes).slice(0, 50);
 	const path = join(reportDir, "04-active-hours.html");
-	await writeFile(path, reportShell(`${stamp} — Active Hours`, `<p>Estimated active work time from event timestamp gaps, bounded by reconstructed visit rows when available. This is not calendar span. Idle threshold is exported by the store, usually 30 minutes. No transcript content is included.</p><div class="card"><h2>Top projects by active time</h2>${tableHtml(["project","active","blocks","sessions","providers","confidence"], metrics.slice(0, 100).map((m) => [m.project ?? "unknown", formatHours(m.activeMinutes, m.activeHours), m.workBlockCount ?? "", m.sessionCount ?? "", (m.providers ?? []).join(", "), m.confidence ?? ""]))}</div><div class="card"><h2>Top agents/lineages by active time</h2>${tableHtml(["agent/lineage","active","sessions","providers"], agentRows.map((row) => [row.agent, formatHours(row.activeMinutes), row.sessions, [...row.providers].sort().join(", ")]))}</div>`));
+	await writeFile(path, reportShell(`${stamp} — Active Hours`, `<p>Estimated active work time from event timestamp gaps, bounded by reconstructed visit rows when available. This is not calendar span. Idle threshold is exported by the store, usually 30 minutes. No transcript content is included.</p><div class="card"><h2>Top projects by active time</h2>${tableHtml(["project","active","blocks","sessions","providers","confidence","aliases / contributing paths"], metrics.slice(0, 100).map((m) => [m.displayName ?? repoIdentityDisplay(graph, m.repoIdentityId) ?? m.project ?? "unknown", formatHours(m.activeMinutes, m.activeHours), m.workBlockCount ?? "", m.sessionCount ?? "", (m.providers ?? []).join(", "), m.confidence ?? "", (m.contributingPaths ?? []).map(shortPath).join("; ")]))}</div><div class="card"><h2>Top agents/lineages by active time</h2>${tableHtml(["agent/lineage","active","sessions","providers"], agentRows.map((row) => [row.agent, formatHours(row.activeMinutes), row.sessions, [...row.providers].sort().join(", ")]))}</div>`));
 	return { title: "Active hours: top projects and agents", path, description: "Estimated active work time from timestamp gaps." } satisfies ReportArtifact;
 }
 
