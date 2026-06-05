@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
+const packageVersion = JSON.parse(await readFile(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).version as string;
 
 const MANIFEST = "relocations.jsonl";
 const OVERLAYS = "session-graph/lineage-overlays.jsonl";
@@ -1802,12 +1803,14 @@ function cliUsage() {
 		"Options:",
 		"  --input <path>      Read a specific graph export JSON",
 		"  -h, --help          Show this help",
+		"  -V, --version       Show version",
 	].join("\n");
 }
 
 async function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
 	const subcommand = argv[0];
 	if (!subcommand || subcommand === "help" || subcommand === "--help" || subcommand === "-h") return cliUsage();
+	if (subcommand === "--version" || subcommand === "-V" || subcommand === "-v" || subcommand === "version") return packageVersion;
 	const rest = argv.slice(1);
 	const flags = new Set(rest);
 	const inputPath = optionValue(rest, "--input");
