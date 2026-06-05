@@ -75,7 +75,15 @@ async function runAgentSessionStore(command) {
             errors.push(`${script}: ${message}`);
         }
     }
-    throw new Error(`Unable to run bundled agent-session-store. Install dependencies or set AGENT_SESSION_STORE_BIN. Attempts:\n${errors.join("\n")}`);
+    throw new Error(`Unable to run bundled agent-session-store.
+
+Try one of:
+  npm install
+  npm install -g agent-session-store@latest
+  export AGENT_SESSION_STORE_BIN=/path/to/agent-session-store
+
+Attempts:
+${errors.join("\n")}`);
 }
 async function refreshStoreExport() {
     const build = await runAgentSessionStore("build");

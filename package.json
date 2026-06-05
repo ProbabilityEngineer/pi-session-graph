@@ -16,7 +16,8 @@
   "scripts": {
     "lint": "tsc --noEmit",
     "whole-lineage": "npx tsx scripts/whole-lineage-graph.ts",
-    "build": "tsc --project tsconfig.json"
+    "build": "tsc --project tsconfig.json",
+    "postinstall": "node scripts/check-agent-session-store.mjs"
   },
   "keywords": [
     "pi-package",

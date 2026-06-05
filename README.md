@@ -114,6 +114,24 @@ Legacy store input:
 
 `/session-graphs` and `pigraph graphs` run the bundled `agent-session-store` backend first, so delayed installs are supported: a user can install only `pi-session-move` initially, then install `pi-session-graph` later and rebuild from raw sessions plus move manifests.
 
+If `agent-session-store` is unavailable, install dependencies in this repo with:
+
+```bash
+npm install
+```
+
+or install the backend globally with:
+
+```bash
+npm install -g agent-session-store@latest
+```
+
+You can also point at an existing install with:
+
+```bash
+export AGENT_SESSION_STORE_BIN=/path/to/agent-session-store
+```
+
 `agent-session-store` merges legacy and namespaced session-move manifests before graph export:
 
 ```text
