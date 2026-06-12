@@ -1,6 +1,6 @@
 {
   "name": "pi-session-graph",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Session lineage graph tools for Pi",
   "type": "module",
   "main": "dist/index.js",
@@ -49,6 +49,7 @@
   },
   "files": [
     "dist",
+    "scripts/check-agent-session-store.mjs",
     "README.md",
     "LICENSE",
     "DESIGN.md"
