@@ -1,5 +1,7 @@
 # pi-session-graph
 
+> One of my diet context engineering and workflow extensions. Add pi-diet-LSP, pi-diet-Ripgrep, pi-repo-move and others from [npm](https://www.npmjs.com/~probabilityengineer).
+
 Lightweight Pi extension for text session status/lineage and generated session graph artifacts.
 
 `pi-session-graph` does not mutate raw session JSONLs or manifests. Canonical imports/rebuilds live in the bundled `agent-session-store` dependency; this package invokes that backend to prepare exports, then renders views.
