@@ -1,6 +1,6 @@
 # pi-session-graph
 
-> One of my diet context engineering and workflow extensions. Add pi-diet-LSP, pi-diet-Ripgrep, pi-repo-move and others from [npm](https://www.npmjs.com/~probabilityengineer).
+> One of my diet context engineering and workflow extensions. Explore the complete collection: <https://www.npmjs.com/~probabilityengineer>
 
 Lightweight Pi extension for text session status/lineage and generated session graph artifacts.
 
