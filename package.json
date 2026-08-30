@@ -1,6 +1,6 @@
 {
   "name": "pi-session-graph",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Session lineage graph tools for Pi",
   "type": "module",
   "main": "dist/index.js",
@@ -32,7 +32,7 @@
     "@earendil-works/pi-coding-agent": ">=0.74.0"
   },
   "dependencies": {
-    "agent-session-store": "github:ProbabilityEngineer/agent-session-store#v0.1.8"
+    "agent-session-store": "^0.1.11"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "latest",
